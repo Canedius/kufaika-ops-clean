@@ -1,0 +1,158 @@
+import ky from "ky";
+import type { Order, OrderStatus, Priority } from "../types";
+import { mockOrders } from "../mocks/orders";
+
+const SHEET_ID = import.meta.env.VITE_SHEET_ID;
+const API_KEY = import.meta.env.VITE_GOOGLE_API_KEY;
+const SHEET_RANGE = import.meta.env.VITE_SHEET_RANGE || "Лист1!A:N";
+const STATUS_WEBHOOK =
+  import.meta.env.VITE_STATUS_WEBHOOK_URL || "https://pngstudio.app.n8n.cloud/webhook-test/e5f152ad-a8a5-4bc8-bc6a-c28e5d614d2a";
+
+const STATUS_TO_LABEL: Record<OrderStatus, string> = {
+  incoming: "Запущено",
+  "in-progress": "В роботі",
+  done: "Готово",
+};
+
+export async function updateOrderStatus({
+  order,
+  status,
+}: {
+  order: Order;
+  status: OrderStatus;
+}) {
+  const payload = {
+    id: order.id,
+    sku: order.sku,
+    status,
+    statusLabel: STATUS_TO_LABEL[status] || status,
+    order, // повний об'єкт, якщо у n8n знадобляться інші поля
+  };
+
+  if (!STATUS_WEBHOOK) {
+    console.warn("STATUS_WEBHOOK not set; skipping remote update");
+    return payload;
+  }
+
+  try {
+    await ky.post(STATUS_WEBHOOK, { json: payload, timeout: 8000 });
+  } catch (err) {
+    console.error("Failed to update status via webhook", err);
+  }
+
+  return payload;
+}
+
+const sheetsClient = ky.create({
+  prefixUrl: "https://sheets.googleapis.com/v4/spreadsheets",
+  retry: { limit: 2, methods: ["get"] },
+  timeout: 8000,
+});
+
+const STATUS_MAP: Record<string, OrderStatus> = {
+  "ЗАПУЩЕНО": "incoming",
+  "В РОБОТІ": "in-progress",
+  "В РОБОТИ": "in-progress",
+  "В РОБОТI": "in-progress",
+  "ГОТОВО": "done",
+};
+
+function parseNumber(v: string | undefined): number | undefined {
+  if (!v) return undefined;
+  const n = Number(v.replace(",", "."));
+  return Number.isFinite(n) ? n : undefined;
+}
+
+function colorNameFromSku(sku: string): string {
+  const code = (sku.match(/^KUF\d{3}([A-Z]{2})/)?.[1] || "").toUpperCase();
+  const map: Record<string, string> = {
+    BK: "Чорний",
+    PK: "Ніжно-рожевий",
+    GF: "Сірий грі",
+    KH: "Хакі",
+    NU: "Бежевий",
+    WH: "Білий",
+    GB: "Графітовий",
+    KT: "Койот",
+    OG: "Олива",
+    KZ: "Кремовий",
+  };
+  return map[code] || code || "";
+}
+
+function productTypeFromSku(sku: string): string {
+  const prefix = sku.slice(0, 6).toUpperCase();
+  const map: Record<string, string> = {
+    KUF001: "Худі утеплений",
+    KUF004: "Світшот утеплений",
+    KUF005: "Світшот легкий",
+    KUF006: "Футболка Premium",
+    KUF007: "Футболка Oversize",
+    KUF008: "Футболка Relaxed",
+    KUF009: "Футболка",
+  };
+  return map[prefix] || "";
+}
+
+function sizeFromSku(sku: string): string {
+  const match = sku.match(/([A-Z0-9/]+)$/);
+  return match ? match[1] : "";
+}
+
+export async function fetchOrders(): Promise<Order[]> {
+  if (!SHEET_ID || !API_KEY) {
+    return mockOrders;
+  }
+
+  const url = `${SHEET_ID}/values/${encodeURIComponent(SHEET_RANGE)}?key=${API_KEY}`;
+  const res = await sheetsClient.get(url).json<{ values: string[][] }>();
+  const rows = res.values || [];
+  if (rows.length < 2) return [];
+
+  const header = rows[0].map((h) => h.trim().toLowerCase());
+  const idx = (name: string) => header.indexOf(name);
+
+  const orders: Order[] = [];
+  for (let i = 1; i < rows.length; i++) {
+    const r = rows[i];
+    const get = (name: string) => {
+      const j = idx(name);
+      return j >= 0 ? (r[j] || "").trim() : "";
+    };
+
+    const rawStatus = get("status").trim();
+    const upperStatus = rawStatus.toUpperCase();
+    const status =
+      STATUS_MAP[upperStatus] ||
+      (upperStatus.includes("РОБОТ") ? "in-progress" : upperStatus.includes("ГОТОВ") ? "done" : "incoming");
+
+    const sku = get("sku");
+    const id = get("launch_id") || `${sku}-${get("launch_date") || i}`;
+
+    const priority = (get("priority") || "Низький") as Priority;
+
+    orders.push({
+      id,
+      sku,
+      productType: productTypeFromSku(sku),
+      color: colorNameFromSku(sku),
+      size: sizeFromSku(sku),
+      quantity: parseNumber(get("to_sew")) || 0,
+      boxes: parseNumber(get("boxes_to_sew")) || 0,
+      priority,
+      status,
+      launchDate: get("launch_date") || "",
+      comment: get("comment") || "",
+      currentAvailable: parseNumber(get("current_available")),
+      targetQty: parseNumber(get("target_qty")),
+      fabric: get("fabric") || "",
+      trendUsed: parseNumber(get("trend_used")),
+      seasonCoef: parseNumber(get("season_coef")),
+      horizonDays: parseNumber(get("horizon_days")),
+      telegramMsgId: get("telegram_msg_id"),
+    });
+  }
+
+  return orders;
+}
+

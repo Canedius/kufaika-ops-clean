@@ -9,48 +9,54 @@ import { OrdersPage } from "./components/OrdersPage";
 
 const qc = new QueryClient();
 
-const router = createBrowserRouter([
+const router = createBrowserRouter(
+  [
+    {
+      path: "/",
+      element: <App />,
+      children: [
+        { index: true, element: <Navigate to="/incoming" replace /> },
+        {
+          path: "incoming",
+          element: (
+            <OrdersPage
+              key="incoming"
+              filterBy={["incoming"]}
+              emptyText="Тут поки немає замовлень."
+              actions={{ take: true }}
+            />
+          ),
+        },
+        {
+          path: "in-progress",
+          element: (
+            <OrdersPage
+              key="in-progress"
+              filterBy={["in-progress"]}
+              emptyText="Немає активних замовлень."
+              actions={{ backToIncoming: true, complete: true }}
+            />
+          ),
+        },
+        {
+          path: "done",
+          element: (
+            <OrdersPage
+              key="done"
+              filterBy={["done"]}
+              emptyText="Тут будуть виготовлені замовлення."
+              actions={{}}
+            />
+          ),
+        },
+      ],
+    },
+  ],
   {
-    path: "/",
-    element: <App />,
-    children: [
-      { index: true, element: <Navigate to="/incoming" replace /> },
-      {
-        path: "incoming",
-        element: (
-          <OrdersPage
-            key="incoming"
-            filterBy={["incoming"]}
-            emptyText="Тут поки немає замовлень."
-            actions={{ take: true }}
-          />
-        ),
-      },
-      {
-        path: "in-progress",
-        element: (
-          <OrdersPage
-            key="in-progress"
-            filterBy={["in-progress"]}
-            emptyText="Немає активних замовлень."
-            actions={{ backToIncoming: true, complete: true }}
-          />
-        ),
-      },
-      {
-        path: "done",
-        element: (
-          <OrdersPage
-            key="done"
-            filterBy={["done"]}
-            emptyText="Тут будуть виготовлені замовлення."
-            actions={{}}
-          />
-        ),
-      },
-    ],
+    // Needed for GitHub Pages hosting under /kufaika-ops-clean/
+    basename: import.meta.env.BASE_URL,
   },
-]);
+);
 
 createRoot(document.getElementById("root")!).render(
   <StrictMode>

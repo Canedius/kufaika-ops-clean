@@ -5,8 +5,8 @@ import { mockOrders } from "../mocks/orders";
 const SHEET_ID = import.meta.env.VITE_SHEET_ID;
 const API_KEY = import.meta.env.VITE_GOOGLE_API_KEY;
 const SHEET_RANGE = import.meta.env.VITE_SHEET_RANGE || "Лист1!A:N";
-const STATUS_WEBHOOK =
-  import.meta.env.VITE_STATUS_WEBHOOK_URL || "https://pngstudio.app.n8n.cloud/webhook/e5f152ad-a8a5-4bc8-bc6a-c28e5d614d2a";
+const STATUS_WEBHOOK = "https://pngstudio.app.n8n.cloud/webhook/e5f152ad-a8a5-4bc8-bc6a-c28e5d614d2a";
+const DONE_WEBHOOK   = "https://pngstudio.app.n8n.cloud/webhook/3af025d2-b275-4f07-ab85-0ed8c41e15b7";
 
 const STATUS_TO_LABEL: Record<OrderStatus, string> = {
   incoming: "Запущено",
@@ -29,13 +29,13 @@ export async function updateOrderStatus({
     order,
   };
 
-  if (!STATUS_WEBHOOK) {
+  if (!(status === "done" ? DONE_WEBHOOK : STATUS_WEBHOOK)) {
     console.warn("STATUS_WEBHOOK not set; skipping remote update");
     return payload;
   }
 
   try {
-    await ky.post(STATUS_WEBHOOK, { json: payload, timeout: 8000 });
+    await ky.post(status === "done" ? DONE_WEBHOOK : STATUS_WEBHOOK, { json: payload, timeout: 8000 });
   } catch (err) {
     console.error("Failed to update status via webhook", err);
   }

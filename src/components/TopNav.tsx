@@ -10,7 +10,7 @@ const links = [
 export const TopNav = () => (
   <header className="topnav">
     <div className="brand">
-      <img src="/logo.webp" alt="Kufaika" className="brand-logo" />
+      <img src={`${import.meta.env.BASE_URL}logo.webp`} alt="Kufaika" className="brand-logo" />
     </div>
     <nav>
       {links.map(({ to, label, icon: Icon, tone }) => (

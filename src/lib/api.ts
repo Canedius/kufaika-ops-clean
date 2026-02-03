@@ -1,12 +1,15 @@
-import ky from "ky";
+﻿import ky from "ky";
 import type { Order, OrderStatus, Priority } from "../types";
 import { mockOrders } from "../mocks/orders";
 
 const SHEET_ID = import.meta.env.VITE_SHEET_ID;
 const API_KEY = import.meta.env.VITE_GOOGLE_API_KEY;
 const SHEET_RANGE = import.meta.env.VITE_SHEET_RANGE || "Лист1!A:N";
-const STATUS_WEBHOOK = "https://pngstudio.app.n8n.cloud/webhook/e5f152ad-a8a5-4bc8-bc6a-c28e5d614d2a";
-const DONE_WEBHOOK   = "https://pngstudio.app.n8n.cloud/webhook/3af025d2-b275-4f07-ab85-0ed8c41e15b7";
+const ARCHIVE_RANGE = import.meta.env.VITE_ARCHIVE_RANGE || "Archive!A:N";
+const STATUS_WEBHOOK =
+  import.meta.env.VITE_STATUS_WEBHOOK_URL || "https://pngstudio.app.n8n.cloud/webhook/e5f152ad-a8a5-4bc8-bc6a-c28e5d614d2a";
+const DONE_WEBHOOK =
+  import.meta.env.VITE_DONE_WEBHOOK_URL || "https://pngstudio.app.n8n.cloud/webhook/3af025d2-b275-4f07-ab85-0ed8c41e15b7";
 
 const STATUS_TO_LABEL: Record<OrderStatus, string> = {
   incoming: "Запущено",
@@ -29,13 +32,15 @@ export async function updateOrderStatus({
     order,
   };
 
-  if (!(status === "done" ? DONE_WEBHOOK : STATUS_WEBHOOK)) {
+  const targetWebhook = status === "done" ? DONE_WEBHOOK : STATUS_WEBHOOK;
+
+  if (!targetWebhook) {
     console.warn("STATUS_WEBHOOK not set; skipping remote update");
     return payload;
   }
 
   try {
-    await ky.post(status === "done" ? DONE_WEBHOOK : STATUS_WEBHOOK, { json: payload, timeout: 8000 });
+    await ky.post(targetWebhook, { json: payload, timeout: 8000 });
   } catch (err) {
     console.error("Failed to update status via webhook", err);
   }
@@ -100,9 +105,9 @@ function productTypeFromSku(sku: string): string {
 
 function fabricFromSku(sku: string): string {
   const prefix = sku.slice(0, 6).toUpperCase();
-  const heavyLoop = ["KUF001", "KUF004"]; // худі/утеплені
-  const lightLoop = ["KUF006", "KUF007", "KUF008", "KUF009"]; // футболки
-  const doubleLoop = ["KUF002", "KUF005"]; // двонитка 240 г
+  const heavyLoop = ["KUF001", "KUF004"];
+  const lightLoop = ["KUF006", "KUF007", "KUF008", "KUF009"];
+  const doubleLoop = ["KUF002", "KUF005"];
   if (heavyLoop.includes(prefix)) return "трьохнитка 320 г/м²";
   if (lightLoop.includes(prefix)) return "стрейч кулір 200 г/м²";
   if (doubleLoop.includes(prefix)) return "двонитка 240 г/м²";
@@ -112,47 +117,42 @@ function fabricFromSku(sku: string): string {
 function sizeFromSku(sku: string): string {
   const norm = sku.toUpperCase().trim().replace(/[^A-Z0-9/]/g, "");
   if (norm.length <= 8) return "";
-  // SKU формат: KUF### + XX (колір) + решта = розмір
   return norm.slice(8);
 }
 
-export async function fetchOrders(): Promise<Order[]> {
-  if (!SHEET_ID || !API_KEY) {
-    return mockOrders;
-  }
+async function fetchRange(range: string, forcedStatus?: OrderStatus): Promise<Order[]> {
+  const url = `${SHEET_ID}/values/${encodeURIComponent(range)}?key=${API_KEY}`;
+  const res = await sheetsClient.get(url).json<{ values: string[][] }>();
+  const rows = res.values || [];
+  if (rows.length < 2) return [];
 
-  try {
-    const url = `${SHEET_ID}/values/${encodeURIComponent(SHEET_RANGE)}?key=${API_KEY}`;
-    const res = await sheetsClient.get(url).json<{ values: string[][] }>();
-    const rows = res.values || [];
-    if (rows.length < 2) return [];
+  const header = rows[0].map((h) => h.trim().toLowerCase());
+  const idx = (name: string) => header.indexOf(name);
 
-    const header = rows[0].map((h) => h.trim().toLowerCase());
-    const idx = (name: string) => header.indexOf(name);
+  const orders: Order[] = [];
+  for (let i = 1; i < rows.length; i++) {
+    const r = rows[i];
+    const get = (name: string) => {
+      const j = idx(name);
+      return j >= 0 ? (r[j] || "").trim() : "";
+    };
 
-    const orders: Order[] = [];
-    for (let i = 1; i < rows.length; i++) {
-      const r = rows[i];
-      const get = (name: string) => {
-        const j = idx(name);
-        return j >= 0 ? (r[j] || "").trim() : "";
-      };
+    const rawStatus = forcedStatus ? forcedStatus : get("status").trim();
+    const upperStatus = rawStatus.toUpperCase();
+    const status =
+      forcedStatus ||
+      STATUS_MAP[upperStatus] ||
+      (upperStatus.includes("РОБОТ") ? "in-progress" : upperStatus.includes("ГОТОВ") ? "done" : "incoming");
 
-      const rawStatus = get("status").trim();
-      const upperStatus = rawStatus.toUpperCase();
-      const status =
-        STATUS_MAP[upperStatus] ||
-        (upperStatus.includes("РОБОТ") ? "in-progress" : upperStatus.includes("ГОТОВ") ? "done" : "incoming");
+    const sku = get("sku");
+    const baseId = get("launch_id") || get("launch_date") || `row-${range}-${i}`;
+    const id = `${baseId}-${sku}`;
 
-      const sku = get("sku");
-      const baseId = get("launch_id") || get("launch_date") || `row-${i}`;
-      const id = `${baseId}-${sku}`;
+    const priority = (get("priority") || "Низький") as Priority;
 
-      const priority = (get("priority") || "Низький") as Priority;
-
-      orders.push({
-        id,
-        sku,
+    orders.push({
+      id,
+      sku,
       productType: productTypeFromSku(sku),
       color: colorNameFromSku(sku),
       size: sizeFromSku(sku),
@@ -168,7 +168,24 @@ export async function fetchOrders(): Promise<Order[]> {
     });
   }
 
-    return orders;
+  return orders;
+}
+
+export async function fetchOrders(): Promise<Order[]> {
+  if (!SHEET_ID || !API_KEY) {
+    return mockOrders;
+  }
+
+  try {
+    const mainOrders = await fetchRange(SHEET_RANGE);
+    const archiveOrders = await fetchRange(ARCHIVE_RANGE, "done");
+    console.info("[Sheets] fetched", {
+      sheet: SHEET_RANGE,
+      archive: ARCHIVE_RANGE,
+      mainCount: mainOrders.length,
+      archiveCount: archiveOrders.length,
+    });
+    return [...mainOrders, ...archiveOrders];
   } catch (err) {
     console.error("Failed to fetch Google Sheets. Check sheet name/range and API key.", err);
     return mockOrders;

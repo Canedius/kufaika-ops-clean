@@ -132,10 +132,15 @@ async function fetchRange(range: string, forcedStatus?: OrderStatus): Promise<Or
   const orders: Order[] = [];
   for (let i = 1; i < rows.length; i++) {
     const r = rows[i];
+    const cells = r.map((v) => (v || "").trim());
+    if (cells.every((c) => !c)) continue; // пропускаємо повністю порожні рядки
     const get = (name: string) => {
       const j = idx(name);
-      return j >= 0 ? (r[j] || "").trim() : "";
+      return j >= 0 ? cells[j] || "" : "";
     };
+
+    const sku = get("sku");
+    if (!sku) continue; // пропускаємо рядки без SKU
 
     const rawStatus = forcedStatus ? forcedStatus : get("status").trim();
     const upperStatus = rawStatus.toUpperCase();
@@ -144,7 +149,6 @@ async function fetchRange(range: string, forcedStatus?: OrderStatus): Promise<Or
       STATUS_MAP[upperStatus] ||
       (upperStatus.includes("РОБОТ") ? "in-progress" : upperStatus.includes("ГОТОВ") ? "done" : "incoming");
 
-    const sku = get("sku");
     const baseId = get("launch_id") || get("launch_date") || `row-${range}-${i}`;
     const id = `${baseId}-${sku}`;
 

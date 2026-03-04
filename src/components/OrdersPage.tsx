@@ -1,20 +1,43 @@
-import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { FilterBar } from "./FilterBar";
 import { OrderCard } from "./OrderCard";
-import { fetchOrders, updateOrderStatus } from "../lib/api";
-import type { Order, OrderStatus, Priority } from "../types";
+import { fetchOrders, fetchCutStock, updateOrderStatus, consumeFromStock, addToStock, createCuttingOrder, createIncomingOrder, archiveOrder, cutToSew, formatDate } from "../lib/api";
+import type { Order, OrderStatus, Priority, CutStockItem } from "../types";
 import { priorityTone, statusLabel, statusTone } from "../theme";
 import { getPhotoUrl } from "../lib/photos";
-import { Info, Shirt, Palette, Ruler, Package, Boxes, BarChart3, Target, RotateCcw } from "lucide-react";
+import { Info, Shirt, Palette, Ruler, Package, BarChart3, Target, RotateCcw, Scissors, Layers } from "lucide-react";
+
+type CutExtra = { cutting_qty?: number; shelf?: string; to_sew?: number };
+
+type ShelfModal = {
+  order: Order;
+  qty: number;
+};
+
+type CutModal = { order: Order; qty: number };
+type SewModal = { order: Order; qty: number };
+type CutToSewModal = { order: Order; qty: number };
+
+type NewOrderForm = {
+  productType: string;
+  size: string;
+  qty: number;
+  priority: Priority;
+  sku: string;
+  comment: string;
+};
 
 type Props = {
   filterBy: OrderStatus[];
   emptyText: string;
   actions: {
-    take?: boolean;
+    cut?: boolean;
+    sew?: boolean;
+    shelf?: boolean;
     complete?: boolean;
     backToIncoming?: boolean;
+    cutToSew?: boolean;
   };
 };
 
@@ -24,27 +47,46 @@ export const OrdersPage = ({ filterBy, emptyText, actions }: Props) => {
   const { data, isLoading, isFetching, refetch } = useQuery<Order[]>({
     queryKey: ["orders"],
     queryFn: fetchOrders,
-    staleTime: Infinity,
+    staleTime: 2 * 60 * 1000,
     gcTime: 10 * 60 * 1000,
-    refetchOnMount: false,
+    refetchOnMount: "always",
     refetchOnWindowFocus: false,
     refetchOnReconnect: false,
   });
 
+  const { data: cutStock = [] } = useQuery<CutStockItem[]>({
+    queryKey: ["cutStock"],
+    queryFn: fetchCutStock,
+    staleTime: 60 * 1000,
+    refetchOnMount: "always",
+    refetchOnWindowFocus: false,
+  });
+
   const [localOrders, setLocalOrders] = useState<Order[]>([]);
+  const pendingArchiveIds = useRef<Set<string>>(new Set());
 
   useEffect(() => {
-    if (data) setLocalOrders(data);
+    if (data) {
+      setLocalOrders(data.filter((o) => !pendingArchiveIds.current.has(o.id)));
+    }
   }, [data]);
 
   const mutation = useMutation({
-    mutationFn: ({ order, status }: { order: Order; status: OrderStatus }) =>
-      updateOrderStatus({ order, status }),
+    mutationFn: ({ sku, currentStatus, status, extra }: { id: string; sku: string; currentStatus?: OrderStatus; status: OrderStatus; extra?: CutExtra }) =>
+      status === "archived" ? Promise.resolve() : updateOrderStatus(sku, status, currentStatus, extra),
     onMutate: (vars) => {
-      setLocalOrders((prev) => prev.map((o) => (o.id === vars.order.id ? { ...o, status: vars.status } : o)));
-      qc.setQueryData<Order[]>(["orders"], (prev) =>
-        (prev || []).map((o) => (o.id === vars.order.id ? { ...o, status: vars.status } : o)),
-      );
+      const update = (o: Order) => {
+        if (o.id !== vars.id) return o;
+        return {
+          ...o,
+          status: vars.status,
+          ...(vars.extra?.cutting_qty !== undefined ? { cutting_qty: vars.extra.cutting_qty } : {}),
+          ...(vars.extra?.shelf !== undefined ? { shelf: vars.extra.shelf } : {}),
+          ...(vars.extra?.to_sew !== undefined ? { quantity: vars.extra.to_sew } : {}),
+        };
+      };
+      setLocalOrders((prev) => prev.map(update));
+      qc.setQueryData<Order[]>(["orders"], (prev) => (prev || []).map(update));
     },
   });
 
@@ -54,11 +96,29 @@ export const OrdersPage = ({ filterBy, emptyText, actions }: Props) => {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [pulseId, setPulseId] = useState<string | null>(null);
   const [bulkSelected, setBulkSelected] = useState<Set<string>>(new Set());
+  const [shelfModal, setShelfModal] = useState<ShelfModal | null>(null);
+  const [cutModal, setCutModal] = useState<CutModal | null>(null);
+  const [sewModal, setSewModal] = useState<SewModal | null>(null);
+  const [cutToSewModal, setCutToSewModal] = useState<CutToSewModal | null>(null);
+  const [newOrderOpen, setNewOrderOpen] = useState(false);
+  const [newOrderForm, setNewOrderForm] = useState<NewOrderForm>({
+    productType: "", size: "", qty: 1, priority: "Низький", sku: "", comment: "",
+  });
 
   useEffect(() => {
     setBulkSelected(new Set());
     setSelectedId(null);
   }, [filterBy.join(",")]);
+
+  // Map SKU|size → total available qty on shelf
+  const stockMap = useMemo(() => {
+    const map = new Map<string, number>();
+    for (const s of cutStock) {
+      const key = `${s.sku}|${s.size}`;
+      map.set(key, (map.get(key) ?? 0) + s.qty);
+    }
+    return map;
+  }, [cutStock]);
 
   const filtered = useMemo(() => {
     const base = localOrders.filter((o) => filterBy.includes(o.status));
@@ -89,11 +149,9 @@ export const OrdersPage = ({ filterBy, emptyText, actions }: Props) => {
 
   const bulkHandle = (status: OrderStatus) => {
     const ids = Array.from(bulkSelected);
-    const allowedStatuses =
-      status === "in-progress" ? ["incoming"] : status === "done" ? ["in-progress"] : ["incoming", "in-progress", "done"];
     ids
       .map((id) => filtered.find((o) => o.id === id))
-      .filter((o): o is Order => !!o && allowedStatuses.includes(o.status))
+      .filter((o): o is Order => !!o)
       .forEach((o) => handleUpdate(o, status));
     setBulkSelected(new Set());
   };
@@ -103,7 +161,134 @@ export const OrdersPage = ({ filterBy, emptyText, actions }: Props) => {
       setPulseId(order.id);
       setTimeout(() => setPulseId(null), 800);
     }
-    mutation.mutate({ order, status });
+    mutation.mutate({ id: order.id, sku: order.sku, currentStatus: order.status, status });
+  };
+
+  // "В розкрій" — відкриває модал з кількістю
+  const handleCut = (order: Order) => {
+    setCutModal({ order, qty: order.quantity });
+  };
+
+  const handleCutConfirm = () => {
+    if (!cutModal) return;
+    const { order, qty } = cutModal;
+    setCutModal(null);
+    createCuttingOrder(order, qty, "", "cutting")
+      .then(() => setTimeout(() => qc.invalidateQueries({ queryKey: ["orders"] }), 3000));
+  };
+
+  // "На склад" — відкриває модал з qty + shelf
+  const openShelfModal = (o: Order) => {
+    setShelfModal({ order: o, qty: o.cutting_qty || o.quantity });
+  };
+
+  const handleShelfConfirm = () => {
+    if (!shelfModal) return;
+    const { order, qty } = shelfModal;
+    setShelfModal(null);
+    pendingArchiveIds.current.add(order.id);
+    mutation.mutate({ id: order.id, sku: order.sku, currentStatus: order.status, status: "archived" });
+    addToStock({ sku: order.sku, size: order.size, qty, shelf: "", cutDate: new Date().toISOString().split("T")[0] });
+    archiveOrder(order);
+    setTimeout(() => {
+      qc.invalidateQueries({ queryKey: ["cutStock"] });
+      qc.invalidateQueries({ queryKey: ["orders"] });
+    }, 3000);
+  };
+
+  const handleComplete = (order: Order) => {
+    pendingArchiveIds.current.add(order.id);
+    mutation.mutate({ id: order.id, sku: order.sku, currentStatus: order.status, status: "archived" });
+    archiveOrder(order);
+    setTimeout(() => qc.invalidateQueries({ queryKey: ["orders"] }), 3000);
+  };
+
+  // "В пошив" — відкриває модал з кількістю (часткова подача можлива)
+  const handleSew = (order: Order) => {
+    const avail = stockMap.get(`${order.sku}|${order.size}`) ?? 0;
+    setSewModal({ order, qty: Math.min(avail, order.quantity) });
+  };
+
+  const handleSewConfirm = () => {
+    if (!sewModal) return;
+    const { order, qty } = sewModal;
+    setSewModal(null);
+
+    // Оптимістичне оновлення картки
+    const newToSew = order.quantity - qty;
+    if (newToSew > 0) {
+      mutation.mutate({ id: order.id, sku: order.sku, currentStatus: "incoming", status: "incoming", extra: { to_sew: newToSew } });
+    } else {
+      mutation.mutate({ id: order.id, sku: order.sku, currentStatus: "incoming", status: "done" });
+    }
+
+    // Фонові API-дзвінки (без await)
+    const available = cutStock.filter((s) => s.sku === order.sku && s.size === order.size);
+    let remaining = qty;
+    for (const item of available) {
+      if (remaining <= 0) break;
+      const take = Math.min(remaining, item.qty);
+      consumeFromStock(item.stockId, take);
+      remaining -= take;
+    }
+    createCuttingOrder(order, qty, "", "in-progress")
+      .then(() => setTimeout(() => {
+        qc.invalidateQueries({ queryKey: ["cutStock"] });
+        qc.invalidateQueries({ queryKey: ["orders"] });
+      }, 3000));
+  };
+
+  const handleCutToSew = (order: Order) => {
+    setCutToSewModal({ order, qty: order.cutting_qty || order.quantity });
+  };
+
+  const handleCutToSewConfirm = () => {
+    if (!cutToSewModal) return;
+    const { order, qty } = cutToSewModal;
+    const maxQty = order.cutting_qty || order.quantity;
+    const remainder = maxQty - qty;
+    setCutToSewModal(null);
+
+    if (remainder === 0) {
+      // Відправили все — cutToSew архівує DT рядок і створює in-progress
+      pendingArchiveIds.current.add(order.id);
+      mutation.mutate({ id: order.id, sku: order.sku, currentStatus: order.status, status: "archived" });
+      cutToSew(order, qty)
+        .then(() => setTimeout(() => {
+          qc.invalidateQueries({ queryKey: ["cutStock"] });
+          qc.invalidateQueries({ queryKey: ["orders"] });
+        }, 3000));
+    } else {
+      // Часткова відправка — НЕ викликаємо cutToSew (він видалив би DT рядок)
+      // Оновлюємо DT рядок з меншою кількістю + створюємо in-progress
+      mutation.mutate({
+        id: order.id,
+        sku: order.sku,
+        currentStatus: order.status,
+        status: "cutting",
+        extra: { cutting_qty: remainder, to_sew: remainder },
+      });
+      createCuttingOrder(order, qty, "", "in-progress")
+        .then(() => setTimeout(() => {
+          qc.invalidateQueries({ queryKey: ["cutStock"] });
+          qc.invalidateQueries({ queryKey: ["orders"] });
+        }, 3000));
+    }
+  };
+
+  const handleNewOrderConfirm = () => {
+    const f = newOrderForm;
+    if (!f.productType.trim() || !f.size.trim() || f.qty < 1) return;
+    setNewOrderOpen(false);
+    setNewOrderForm({ productType: "", size: "", qty: 1, priority: "Низький", sku: "", comment: "" });
+    createIncomingOrder({
+      productType: f.productType.trim(),
+      size: f.size.trim(),
+      qty: f.qty,
+      priority: f.priority,
+      sku: f.sku.trim() || undefined,
+      comment: f.comment.trim() || undefined,
+    }).then(() => setTimeout(() => qc.invalidateQueries({ queryKey: ["orders"] }), 3000));
   };
 
   return (
@@ -121,22 +306,28 @@ export const OrdersPage = ({ filterBy, emptyText, actions }: Props) => {
 
       <div className="board">
         <div className="cards-list">
+          {filterBy.includes("incoming") && (
+            <button className="btn add-sew-btn" onClick={() => setNewOrderOpen(true)}>
+              + Додати пошив
+            </button>
+          )}
           {bulkSelected.size > 0 && (
             <div className="bulk-bar">
               <span>Виділено: {bulkSelected.size}</span>
               <div className="bulk-actions">
-                {actions.take && (
-                  <button className="btn mini primary" onClick={() => bulkHandle("in-progress")}>
-                    Взяти в роботу
-                  </button>
-                )}
                 {actions.backToIncoming && (
                   <button className="btn mini ghost" onClick={() => bulkHandle("incoming")}>
                     Повернути в чергу
                   </button>
                 )}
                 {actions.complete && (
-                  <button className="btn mini success" onClick={() => bulkHandle("done")}>
+                  <button className="btn mini success" onClick={() => {
+                    Array.from(bulkSelected)
+                      .map((id) => filtered.find((o) => o.id === id))
+                      .filter((o): o is Order => !!o)
+                      .forEach(handleComplete);
+                    setBulkSelected(new Set());
+                  }}>
                     Виконано
                   </button>
                 )}
@@ -157,9 +348,13 @@ export const OrdersPage = ({ filterBy, emptyText, actions }: Props) => {
               selectable
               checked={bulkSelected.has(order.id)}
               onToggleSelect={toggleBulk}
-              onTake={actions.take ? (o) => handleUpdate(o, "in-progress") : undefined}
+              onCut={actions.cut ? handleCut : undefined}
+              onSew={actions.sew ? handleSew : undefined}
+              hasStock={stockMap.get(`${order.sku}|${order.size}`) ? (stockMap.get(`${order.sku}|${order.size}`)! > 0) : false}
+              onShelf={actions.shelf ? openShelfModal : undefined}
+              onCutToSew={actions.cutToSew ? handleCutToSew : undefined}
               onBack={actions.backToIncoming ? (o) => handleUpdate(o, "incoming") : undefined}
-              onDone={actions.complete ? (o) => handleUpdate(o, "done") : undefined}
+              onDone={actions.complete ? handleComplete : undefined}
             />
           ))}
         </div>
@@ -176,22 +371,34 @@ export const OrdersPage = ({ filterBy, emptyText, actions }: Props) => {
                 <div className={`pill ${priorityTone[selected.priority]}`}>{selected.priority}</div>
               </div>
 
-              {getPhotoUrl(selected.sku) && (
-                <div className="detail-photo">
-                  <img src={getPhotoUrl(selected.sku)!} alt={selected.sku} />
-                </div>
-              )}
-
-              <div className="detail-grid two-col">
-                <div className="detail-col">
+              <div className="detail-photo-row">
+                {getPhotoUrl(selected.sku) && (
+                  <div className="detail-photo">
+                    <img src={getPhotoUrl(selected.sku)!} alt={selected.sku} />
+                  </div>
+                )}
+                <div className="detail-quick">
                   <Detail icon={<Info size={14} />} label="Статус" value={statusLabel[selected.status]} tone={statusTone[selected.status]} />
-                  <Detail icon={<Shirt size={14} />} label="Тканина" value={selected.fabric || "н/д"} />
+                  {selected.launchDate
+                    ? <Detail label="Дата запуску" value={formatDate(selected.launchDate)} />
+                    : <div />
+                  }
                   <Detail icon={<Palette size={14} />} label="Колір" value={selected.color} />
                   <Detail icon={<Ruler size={14} />} label="Розмір" value={selected.size} />
+                  <Detail icon={<Package size={14} />} label="Кількість / Ящики" value={`${selected.quantity} шт / ${selected.boxes ?? "н/д"} ящ`} />
+                  <Detail icon={<Shirt size={14} />} label="Тканина" value={selected.fabric || "н/д"} />
                 </div>
+              </div>
+
+              <div className="detail-section-label">Склад</div>
+              <div className="detail-grid two-col">
                 <div className="detail-col">
-                  <Detail icon={<Package size={14} />} label="Кількість у пошив" value={`${selected.quantity} шт`} />
-                  <Detail icon={<Boxes size={14} />} label="Ящики" value={`${selected.boxes ?? "н/д"}`} />
+                  {(selected.cutting_qty !== undefined && selected.cutting_qty > 0) && (
+                    <Detail icon={<Scissors size={14} />} label="В розкрої" value={`${selected.cutting_qty} шт`} tone="tone-orange" />
+                  )}
+                  {selected.shelf && (
+                    <Detail label="Полиця" value={selected.shelf} />
+                  )}
                   {selected.currentAvailable !== undefined && (
                     <Detail
                       icon={<BarChart3 size={14} />}
@@ -200,6 +407,14 @@ export const OrdersPage = ({ filterBy, emptyText, actions }: Props) => {
                       tone={selected.currentAvailable < 0 ? "tone-red-text" : undefined}
                     />
                   )}
+                  {(() => {
+                    const avail = stockMap.get(`${selected.sku}|${selected.size}`);
+                    return avail !== undefined && avail > 0 ? (
+                      <Detail icon={<Layers size={14} />} label="На складі (крій)" value={`${avail} шт`} tone="tone-green" />
+                    ) : null;
+                  })()}
+                </div>
+                <div className="detail-col">
                   {selected.targetQty !== undefined && (
                     <Detail icon={<Target size={14} />} label="Цільовий запас" value={selected.targetQty.toString()} />
                   )}
@@ -209,9 +424,32 @@ export const OrdersPage = ({ filterBy, emptyText, actions }: Props) => {
               {selected.comment && <p className="comment">{selected.comment}</p>}
 
               <div className="actions">
-                {actions.take && selected.status === "incoming" && (
-                  <button className="btn primary" onClick={() => handleUpdate(selected, "in-progress")}>
-                    Взяти в роботу
+                {actions.cut && selected.status === "incoming" && (
+                  <button className="btn primary" onClick={() => handleCut(selected)}>
+                    В розкрій
+                  </button>
+                )}
+                {actions.sew && selected.status === "incoming" && (() => {
+                  const avail = stockMap.get(`${selected.sku}|${selected.size}`) ?? 0;
+                  return (
+                    <button
+                      className="btn ghost"
+                      disabled={avail === 0}
+                      onClick={() => handleSew(selected)}
+                      title={avail === 0 ? "Немає залишків крою на складі" : `На складі ${avail} шт`}
+                    >
+                      В пошив {avail > 0 ? `(${avail} шт)` : ""}
+                    </button>
+                  );
+                })()}
+                {actions.shelf && selected.status === "cutting" && (
+                  <button className="btn primary" onClick={() => openShelfModal(selected)}>
+                    На склад
+                  </button>
+                )}
+                {actions.cutToSew && selected.status === "cutting" && (
+                  <button className="btn ghost" onClick={() => handleCutToSew(selected)}>
+                    В пошив
                   </button>
                 )}
                 {actions.backToIncoming && selected.status === "in-progress" && (
@@ -220,7 +458,7 @@ export const OrdersPage = ({ filterBy, emptyText, actions }: Props) => {
                   </button>
                 )}
                 {actions.complete && selected.status !== "done" && (
-                  <button className="btn success" onClick={() => handleUpdate(selected, "done")}>
+                  <button className="btn success" onClick={() => handleComplete(selected)}>
                     Виконано
                   </button>
                 )}
@@ -229,6 +467,202 @@ export const OrdersPage = ({ filterBy, emptyText, actions }: Props) => {
           )}
         </div>
       </div>
+
+      {cutModal && (
+        <div className="modal-overlay" onClick={() => setCutModal(null)}>
+          <div className="modal" onClick={(e) => e.stopPropagation()}>
+            <div className="modal-title">В розкрій — {cutModal.order.sku} ({cutModal.order.size})</div>
+            <div className="modal-field">
+              <label>Кількість у розкрій (шт)</label>
+              <input
+                type="number"
+                min={1}
+                value={cutModal.qty}
+                onChange={(e) => setCutModal((m) => m && { ...m, qty: Math.max(1, Number(e.target.value)) })}
+              />
+            </div>
+            <div className="modal-actions">
+              <button className="btn ghost" onClick={() => setCutModal(null)}>Скасувати</button>
+              <button className="btn primary" disabled={cutModal.qty < 1} onClick={handleCutConfirm}>
+                Підтвердити
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {sewModal && (() => {
+        const avail = stockMap.get(`${sewModal.order.sku}|${sewModal.order.size}`) ?? 0;
+        return (
+          <div className="modal-overlay" onClick={() => setSewModal(null)}>
+            <div className="modal" onClick={(e) => e.stopPropagation()}>
+              <div className="modal-title">В пошив — {sewModal.order.sku} ({sewModal.order.size})</div>
+              <div className="modal-field">
+                <label>Кількість у пошив (шт)</label>
+                <input
+                  type="number"
+                  min={1}
+                  max={avail}
+                  value={sewModal.qty}
+                  onChange={(e) => setSewModal((m) => m && { ...m, qty: Math.min(avail, Math.max(1, Number(e.target.value))) })}
+                />
+                <span className="muted" style={{ fontSize: "12px", marginTop: "4px", display: "block" }}>
+                  На складі: {avail} шт — більше передати неможливо
+                </span>
+              </div>
+              <div className="modal-actions">
+                <button className="btn ghost" onClick={() => setSewModal(null)}>Скасувати</button>
+                <button className="btn primary" disabled={sewModal.qty < 1 || sewModal.qty > avail} onClick={handleSewConfirm}>
+                  Підтвердити
+                </button>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
+
+      {shelfModal && (
+        <div className="modal-overlay" onClick={() => setShelfModal(null)}>
+          <div className="modal" onClick={(e) => e.stopPropagation()}>
+            <div className="modal-title">
+              На склад — {shelfModal.order.sku} ({shelfModal.order.size})
+            </div>
+
+            <div className="modal-field">
+              <label>Кількість (шт)</label>
+              <input
+                type="number"
+                min={1}
+                value={shelfModal.qty}
+                onChange={(e) => setShelfModal((m) => m && { ...m, qty: Math.max(1, Number(e.target.value)) })}
+              />
+            </div>
+
+            <div className="modal-actions">
+              <button className="btn ghost" onClick={() => setShelfModal(null)}>Скасувати</button>
+              <button
+                className="btn primary"
+                disabled={shelfModal.qty < 1}
+                onClick={handleShelfConfirm}
+              >
+                Підтвердити
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+      {cutToSewModal && (() => {
+        const maxQty = cutToSewModal.order.cutting_qty || cutToSewModal.order.quantity;
+        return (
+          <div className="modal-overlay" onClick={() => setCutToSewModal(null)}>
+            <div className="modal" onClick={(e) => e.stopPropagation()}>
+              <div className="modal-title">В пошив з розкрою — {cutToSewModal.order.sku} ({cutToSewModal.order.size})</div>
+              <div className="modal-field">
+                <label>Кількість у пошив (шт)</label>
+                <input
+                  type="number"
+                  min={1}
+                  max={maxQty}
+                  value={cutToSewModal.qty}
+                  onChange={(e) => setCutToSewModal((m) => m && { ...m, qty: Math.min(maxQty, Math.max(1, Number(e.target.value))) })}
+                />
+                <span className="muted" style={{ fontSize: "12px", marginTop: "4px", display: "block" }}>
+                  У розкрої: {maxQty} шт
+                </span>
+              </div>
+              <div className="modal-actions">
+                <button className="btn ghost" onClick={() => setCutToSewModal(null)}>Скасувати</button>
+                <button className="btn primary" disabled={cutToSewModal.qty < 1 || cutToSewModal.qty > maxQty} onClick={handleCutToSewConfirm}>
+                  Підтвердити
+                </button>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
+      {newOrderOpen && (
+        <div className="modal-overlay" onClick={() => setNewOrderOpen(false)}>
+          <div className="modal modal--new-order" onClick={(e) => e.stopPropagation()}>
+            <div className="modal-title">Нова задача</div>
+
+            <div className="modal-field">
+              <label>Назва товару *</label>
+              <input
+                type="text"
+                placeholder="напр. Худі утеплений"
+                autoFocus
+                value={newOrderForm.productType}
+                onChange={(e) => setNewOrderForm((f) => ({ ...f, productType: e.target.value }))}
+              />
+            </div>
+
+            <div className="modal-row-2">
+              <div className="modal-field">
+                <label>Розмір *</label>
+                <input
+                  type="text"
+                  placeholder="XS / S / M…"
+                  value={newOrderForm.size}
+                  onChange={(e) => setNewOrderForm((f) => ({ ...f, size: e.target.value }))}
+                />
+              </div>
+              <div className="modal-field">
+                <label>Кількість (шт) *</label>
+                <input
+                  type="number"
+                  min={1}
+                  value={newOrderForm.qty}
+                  onChange={(e) => setNewOrderForm((f) => ({ ...f, qty: Math.max(1, Number(e.target.value)) }))}
+                />
+              </div>
+            </div>
+
+            <div className="modal-field">
+              <label>Пріоритет *</label>
+              <select
+                value={newOrderForm.priority}
+                onChange={(e) => setNewOrderForm((f) => ({ ...f, priority: e.target.value as Priority }))}
+              >
+                <option value="Низький">Низький</option>
+                <option value="Терміново">Терміново</option>
+                <option value="Критично">Критично</option>
+                <option value="Дефіцит">Дефіцит</option>
+              </select>
+            </div>
+
+            <div className="modal-field">
+              <label>SKU <span className="modal-optional">(необов'язково)</span></label>
+              <input
+                type="text"
+                placeholder="напр. KUF001BKXS"
+                value={newOrderForm.sku}
+                onChange={(e) => setNewOrderForm((f) => ({ ...f, sku: e.target.value }))}
+              />
+            </div>
+
+            <div className="modal-field">
+              <label>Коментар <span className="modal-optional">(необов'язково)</span></label>
+              <input
+                type="text"
+                placeholder="Будь-яка нотатка…"
+                value={newOrderForm.comment}
+                onChange={(e) => setNewOrderForm((f) => ({ ...f, comment: e.target.value }))}
+              />
+            </div>
+
+            <div className="modal-actions">
+              <button className="btn ghost" onClick={() => setNewOrderOpen(false)}>Скасувати</button>
+              <button
+                className="btn primary"
+                disabled={!newOrderForm.productType.trim() || !newOrderForm.size.trim() || newOrderForm.qty < 1}
+                onClick={handleNewOrderConfirm}
+              >
+                Створити
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

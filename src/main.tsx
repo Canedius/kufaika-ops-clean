@@ -6,57 +6,56 @@ import { createBrowserRouter, Navigate, RouterProvider } from "react-router-dom"
 import App from "./App";
 import "./index.css";
 import { OrdersPage } from "./components/OrdersPage";
+import { ArchivePage } from "./components/ArchivePage";
 
 const qc = new QueryClient();
 
-const router = createBrowserRouter(
-  [
-    {
-      path: "/",
-      element: <App />,
-      children: [
-        { index: true, element: <Navigate to="/incoming" replace /> },
-        {
-          path: "incoming",
-          element: (
-            <OrdersPage
-              key="incoming"
-              filterBy={["incoming"]}
-              emptyText="Тут поки немає замовлень."
-              actions={{ take: true }}
-            />
-          ),
-        },
-        {
-          path: "in-progress",
-          element: (
-            <OrdersPage
-              key="in-progress"
-              filterBy={["in-progress"]}
-              emptyText="Немає активних замовлень."
-              actions={{ backToIncoming: true, complete: true }}
-            />
-          ),
-        },
-        {
-          path: "done",
-          element: (
-            <OrdersPage
-              key="done"
-              filterBy={["done"]}
-              emptyText="Тут будуть виготовлені замовлення."
-              actions={{}}
-            />
-          ),
-        },
-      ],
-    },
-  ],
+const router = createBrowserRouter([
   {
-    // Needed for GitHub Pages hosting under /kufaika-ops-clean/
-    basename: import.meta.env.BASE_URL,
+    path: "/",
+    element: <App />,
+    children: [
+      { index: true, element: <Navigate to="/incoming" replace /> },
+      {
+        path: "incoming",
+        element: (
+          <OrdersPage
+            key="incoming"
+            filterBy={["incoming"]}
+            emptyText="Тут поки немає замовлень."
+            actions={{ cut: true, sew: true }}
+          />
+        ),
+      },
+      {
+        path: "cutting",
+        element: (
+          <OrdersPage
+            key="cutting"
+            filterBy={["cutting"]}
+            emptyText="Тут немає позицій в розкрої."
+            actions={{ shelf: true, cutToSew: true }}
+          />
+        ),
+      },
+      {
+        path: "in-progress",
+        element: (
+          <OrdersPage
+            key="in-progress"
+            filterBy={["in-progress"]}
+            emptyText="Немає активних замовлень."
+            actions={{ complete: true }}
+          />
+        ),
+      },
+      {
+        path: "done",
+        element: <ArchivePage key="done" />,
+      },
+    ],
   },
-);
+]);
 
 createRoot(document.getElementById("root")!).render(
   <StrictMode>

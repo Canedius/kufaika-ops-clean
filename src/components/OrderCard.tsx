@@ -1,4 +1,4 @@
-﻿import type { Order } from "../types";
+import type { Order } from "../types";
 import { priorityTone, statusLabel, statusTone } from "../theme";
 import { AlertTriangle } from "lucide-react";
 import { getPhotoUrl } from "../lib/photos";
@@ -11,7 +11,11 @@ type Props = {
   selectable?: boolean;
   onSelect?: (order: Order) => void;
   onToggleSelect?: (order: Order, checked: boolean) => void;
-  onTake?: (order: Order) => void;
+  onCut?: (order: Order) => void;
+  onSew?: (order: Order) => void;
+  hasStock?: boolean;
+  onShelf?: (order: Order) => void;
+  onCutToSew?: (order: Order) => void;
   onBack?: (order: Order) => void;
   onDone?: (order: Order) => void;
   pulse?: boolean;
@@ -24,7 +28,11 @@ export const OrderCard = ({
   selectable,
   onSelect,
   onToggleSelect,
-  onTake,
+  onCut,
+  onSew,
+  hasStock,
+  onShelf,
+  onCutToSew,
   onBack,
   onDone,
   pulse,
@@ -79,9 +87,29 @@ export const OrderCard = ({
         <span className={statusColor}>{status}</span>
         {order.priority === "Дефіцит" && <AlertTriangle size={16} className="alert-icon" />}
         <div className="card-actions">
-          {onTake && order.status === "incoming" && (
-            <button className="btn mini primary" onClick={(e) => { stop(e); onTake(order); }}>
-              Взяти
+          {onCut && order.status === "incoming" && (
+            <button className="btn mini primary" onClick={(e) => { stop(e); onCut(order); }}>
+              В розкрій
+            </button>
+          )}
+          {onSew && order.status === "incoming" && (
+            <button
+              className="btn mini ghost"
+              onClick={(e) => { stop(e); onSew(order); }}
+              disabled={!hasStock}
+              title={hasStock ? "Взяти в пошив зі складу" : "Немає залишків крою на складі"}
+            >
+              В пошив
+            </button>
+          )}
+          {onShelf && order.status === "cutting" && (
+            <button className="btn mini primary" onClick={(e) => { stop(e); onShelf(order); }}>
+              На склад
+            </button>
+          )}
+          {onCutToSew && order.status === "cutting" && (
+            <button className="btn mini ghost" onClick={(e) => { stop(e); onCutToSew(order); }}>
+              В пошив
             </button>
           )}
           {onBack && order.status === "in-progress" && (
@@ -99,4 +127,3 @@ export const OrderCard = ({
     </article>
   );
 };
-

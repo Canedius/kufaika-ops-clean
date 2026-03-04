@@ -1,52 +1,17 @@
-﻿import ky from "ky";
-import type { Order, OrderStatus, Priority } from "../types";
+import ky from "ky";
+import type { Order, OrderStatus, Priority, CutStockItem } from "../types";
 import { mockOrders } from "../mocks/orders";
 
 const SHEET_ID = import.meta.env.VITE_SHEET_ID;
 const API_KEY = import.meta.env.VITE_GOOGLE_API_KEY;
-const SHEET_RANGE = import.meta.env.VITE_SHEET_RANGE || "Лист1!A:N";
 const ARCHIVE_RANGE = import.meta.env.VITE_ARCHIVE_RANGE || "Archive!A:N";
-const STATUS_WEBHOOK =
-  import.meta.env.VITE_STATUS_WEBHOOK_URL || "https://pngstudio.app.n8n.cloud/webhook/e5f152ad-a8a5-4bc8-bc6a-c28e5d614d2a";
-const DONE_WEBHOOK =
-  import.meta.env.VITE_DONE_WEBHOOK_URL || "https://pngstudio.app.n8n.cloud/webhook/3af025d2-b275-4f07-ab85-0ed8c41e15b7";
-
-const STATUS_TO_LABEL: Record<OrderStatus, string> = {
-  incoming: "Запущено",
-  "in-progress": "В роботі",
-  done: "Готово",
-};
-
-export async function updateOrderStatus({
-  order,
-  status,
-}: {
-  order: Order;
-  status: OrderStatus;
-}) {
-  const payload = {
-    id: order.id,
-    sku: order.sku,
-    status,
-    statusLabel: STATUS_TO_LABEL[status] || status,
-    order,
-  };
-
-  const targetWebhook = status === "done" ? DONE_WEBHOOK : STATUS_WEBHOOK;
-
-  if (!targetWebhook) {
-    console.warn("STATUS_WEBHOOK not set; skipping remote update");
-    return payload;
-  }
-
-  try {
-    await ky.post(targetWebhook, { json: payload, timeout: 8000 });
-  } catch (err) {
-    console.error("Failed to update status via webhook", err);
-  }
-
-  return payload;
-}
+const WEBHOOK_STATUS = import.meta.env.VITE_N8N_STATUS_WEBHOOK;
+const WEBHOOK_CUTSTOCK = import.meta.env.VITE_N8N_CUTSTOCK_WEBHOOK;
+const WEBHOOK_ARCHIVE = import.meta.env.VITE_N8N_ARCHIVE_WEBHOOK;
+const WEBHOOK_ORDERS_READ = import.meta.env.VITE_N8N_ORDERS_READ;
+const WEBHOOK_CUTSTOCK_READ = import.meta.env.VITE_N8N_CUTSTOCK_READ;
+const WEBHOOK_ARCHIVE_READ = import.meta.env.VITE_N8N_ARCHIVE_READ;
+const WEBHOOK_CUT_TO_SEW = import.meta.env.VITE_N8N_CUT_TO_SEW_WEBHOOK;
 
 const sheetsClient = ky.create({
   prefixUrl: "https://sheets.googleapis.com/v4/spreadsheets",
@@ -54,17 +19,30 @@ const sheetsClient = ky.create({
   timeout: 8000,
 });
 
+// Used only by fetchArchive (still reads from Sheets)
 const STATUS_MAP: Record<string, OrderStatus> = {
   "ЗАПУЩЕНО": "incoming",
   "В РОБОТІ": "in-progress",
   "В РОБОТИ": "in-progress",
   "В РОБОТI": "in-progress",
+  "В РОЗКРОЇ": "cutting",
+  "РОЗКРІЙ": "cutting",
   "ГОТОВО": "done",
   INCOMING: "incoming",
+  CUTTING: "cutting",
   "IN-PROGRESS": "in-progress",
   "IN PROGRESS": "in-progress",
   DONE: "done",
+  ARCHIVED: "archived",
+  "АРХІВ": "archived",
 };
+
+export function formatDate(iso: string): string {
+  if (!iso) return "";
+  const d = new Date(iso);
+  if (isNaN(d.getTime())) return iso;
+  return `${String(d.getDate()).padStart(2, "0")}.${String(d.getMonth() + 1).padStart(2, "0")}.${d.getFullYear()}`;
+}
 
 function parseNumber(v: string | undefined): number | undefined {
   if (!v) return undefined;
@@ -103,7 +81,7 @@ function productTypeFromSku(sku: string): string {
   return map[prefix] || "";
 }
 
-function fabricFromSku(sku: string): string {
+export function fabricFromSku(sku: string): string {
   const prefix = sku.slice(0, 6).toUpperCase();
   const heavyLoop = ["KUF001", "KUF004"];
   const lightLoop = ["KUF006", "KUF007", "KUF008", "KUF009"];
@@ -112,12 +90,6 @@ function fabricFromSku(sku: string): string {
   if (lightLoop.includes(prefix)) return "стрейч кулір 200 г/м²";
   if (doubleLoop.includes(prefix)) return "двонитка 240 г/м²";
   return "";
-}
-
-function sizeFromSku(sku: string): string {
-  const norm = sku.toUpperCase().trim().replace(/[^A-Z0-9/]/g, "");
-  if (norm.length <= 8) return "";
-  return norm.slice(8);
 }
 
 async function fetchRange(range: string, forcedStatus?: OrderStatus): Promise<Order[]> {
@@ -133,24 +105,27 @@ async function fetchRange(range: string, forcedStatus?: OrderStatus): Promise<Or
   for (let i = 1; i < rows.length; i++) {
     const r = rows[i];
     const cells = r.map((v) => (v || "").trim());
-    if (cells.every((c) => !c)) continue; // пропускаємо повністю порожні рядки
+    if (cells.every((c) => !c)) continue;
     const get = (name: string) => {
       const j = idx(name);
       return j >= 0 ? cells[j] || "" : "";
     };
 
     const sku = get("sku");
-    if (!sku) continue; // пропускаємо рядки без SKU
+    if (!sku) continue;
 
     const rawStatus = forcedStatus ? forcedStatus : get("status").trim();
     const upperStatus = rawStatus.toUpperCase();
-    const status =
+    const status: OrderStatus =
       forcedStatus ||
       STATUS_MAP[upperStatus] ||
-      (upperStatus.includes("РОБОТ") ? "in-progress" : upperStatus.includes("ГОТОВ") ? "done" : "incoming");
+      (upperStatus.includes("РОЗКРІЙ") || upperStatus.includes("РОЗКРО") ? "cutting"
+        : upperStatus.includes("РОБОТ") ? "in-progress"
+        : upperStatus.includes("ГОТОВ") ? "done"
+        : "incoming");
 
-    const baseId = get("launch_id") || get("launch_date") || `row-${range}-${i}`;
-    const id = `${baseId}-${sku}`;
+    const baseId = get("launch_id") || get("launch_date") || `row-${range}`;
+    const id = `${baseId}-${sku}-${i}`;
 
     const priority = (get("priority") || "Низький") as Priority;
 
@@ -159,7 +134,7 @@ async function fetchRange(range: string, forcedStatus?: OrderStatus): Promise<Or
       sku,
       productType: productTypeFromSku(sku),
       color: colorNameFromSku(sku),
-      size: sizeFromSku(sku),
+      size: get("size") || sku.slice(8),
       quantity: parseNumber(get("to_sew")) || 0,
       boxes: parseNumber(get("boxes_to_sew")) || 0,
       priority,
@@ -169,6 +144,8 @@ async function fetchRange(range: string, forcedStatus?: OrderStatus): Promise<Or
       currentAvailable: parseNumber(get("current_available")),
       targetQty: parseNumber(get("target_qty")),
       fabric: get("fabric") || fabricFromSku(sku),
+      cutting_qty: parseNumber(get("cutting_qty")),
+      shelf: get("shelf") || undefined,
     });
   }
 
@@ -176,22 +153,234 @@ async function fetchRange(range: string, forcedStatus?: OrderStatus): Promise<Or
 }
 
 export async function fetchOrders(): Promise<Order[]> {
-  if (!SHEET_ID || !API_KEY) {
+  if (!WEBHOOK_ORDERS_READ) {
     return mockOrders;
   }
 
   try {
-    const mainOrders = await fetchRange(SHEET_RANGE);
-    const archiveOrders = await fetchRange(ARCHIVE_RANGE, "done");
-    console.info("[Sheets] fetched", {
-      sheet: SHEET_RANGE,
-      archive: ARCHIVE_RANGE,
-      mainCount: mainOrders.length,
-      archiveCount: archiveOrders.length,
-    });
-    return [...mainOrders, ...archiveOrders];
+    const orders = await ky.get(WEBHOOK_ORDERS_READ, { timeout: 10000 }).json<Order[]>();
+    console.info("[n8n cache] fetched orders", orders.length);
+    return orders
+      .filter((o) => o.status !== "archived")
+      .map((o) => ({
+        ...o,
+        size: o.size || o.sku.match(/^KUF\d{3}[A-Z]{2}(.*)/i)?.[1] || "",
+        color: o.color || colorNameFromSku(o.sku),
+        productType: o.productType || productTypeFromSku(o.sku),
+      }));
   } catch (err) {
-    console.error("Failed to fetch Google Sheets. Check sheet name/range and API key.", err);
+    console.error("Failed to fetch orders from n8n cache", err);
     return mockOrders;
   }
+}
+
+export async function fetchArchive(): Promise<Order[]> {
+  if (WEBHOOK_ARCHIVE_READ) {
+    try {
+      const orders = await ky.get(WEBHOOK_ARCHIVE_READ, { timeout: 10000 }).json<Order[]>();
+      console.info("[n8n DT] fetched archive", orders.length);
+      return orders;
+    } catch (err) {
+      console.error("Failed to fetch archive from n8n DT", err);
+    }
+  }
+  if (!SHEET_ID || !API_KEY) return [];
+  try {
+    return await fetchRange(ARCHIVE_RANGE);
+  } catch (err) {
+    console.error("Failed to fetch Archive sheet.", err);
+    return [];
+  }
+}
+
+export async function fetchCutStock(): Promise<CutStockItem[]> {
+  if (!WEBHOOK_CUTSTOCK_READ) return [];
+  try {
+    const items = await ky.get(WEBHOOK_CUTSTOCK_READ, { timeout: 10000 }).json<CutStockItem[]>();
+    console.info("[n8n cache] fetched cutstock", items.length);
+    return items;
+  } catch (err) {
+    console.error("Failed to fetch CutStock from n8n cache", err);
+    return [];
+  }
+}
+
+export async function updateCutStockQty(stockId: string, qty: number): Promise<void> {
+  if (!WEBHOOK_CUTSTOCK) {
+    console.info(`[mock] updateCutStockQty stockId=${stockId} qty=${qty}`);
+    return;
+  }
+  await ky.post(WEBHOOK_CUTSTOCK, { json: { action: "update", stockId, qty }, timeout: 10000 });
+}
+
+export async function consumeFromStock(stockId: string, qty: number): Promise<void> {
+  if (!WEBHOOK_CUTSTOCK) {
+    console.info(`[mock] consumeFromStock stockId=${stockId} qty=${qty}`);
+    return;
+  }
+  await ky.post(WEBHOOK_CUTSTOCK, { json: { action: "consume", stockId, qty }, timeout: 10000 });
+}
+
+export async function addToStock(item: Omit<CutStockItem, "stockId" | "status">): Promise<void> {
+  if (!WEBHOOK_CUTSTOCK) {
+    console.info(`[mock] addToStock`, item);
+    return;
+  }
+  await ky.post(WEBHOOK_CUTSTOCK, { json: { action: "add", ...item }, timeout: 10000 });
+}
+
+export async function createCuttingOrder(
+  order: Pick<Order, "sku" | "size" | "launchDate" | "priority" | "fabric" | "comment" | "targetQty" | "boxes" | "quantity" | "currentAvailable">,
+  qty: number,
+  shelf: string,
+  status: OrderStatus = "cutting",
+): Promise<void> {
+  if (!WEBHOOK_STATUS) {
+    console.info(`[mock] createCuttingOrder sku=${order.sku} qty=${qty} shelf=${shelf} status=${status}`);
+    return;
+  }
+  const boxes_to_sew = order.quantity > 0 ? Math.round((qty / order.quantity) * order.boxes) : 0;
+  await ky.post(WEBHOOK_STATUS, {
+    json: {
+      action: "create",
+      order: {
+        sku: order.sku,
+        size: order.size,
+        launchDate: formatDate(new Date().toISOString()),
+        priority: order.priority,
+        fabric: order.fabric,
+        comment: order.comment,
+        targetQty: order.targetQty,
+        boxes_to_sew,
+        current_available: order.currentAvailable ?? "",
+      },
+      status,
+      cutting_qty: qty,
+      to_sew: qty,
+      shelf,
+    },
+    timeout: 10000,
+  });
+}
+
+export async function createIncomingOrder(fields: {
+  productType: string;
+  size: string;
+  qty: number;
+  priority: Priority;
+  sku?: string;
+  boxes?: number;
+  comment?: string;
+  targetQty?: number;
+}): Promise<void> {
+  if (!WEBHOOK_STATUS) {
+    console.info(`[mock] createIncomingOrder`, fields);
+    return;
+  }
+  const sku = fields.sku || "";
+  await ky.post(WEBHOOK_STATUS, {
+    json: {
+      action: "create",
+      order: {
+        sku,
+        size: fields.size,
+        launchDate: formatDate(new Date().toISOString()),
+        priority: fields.priority,
+        fabric: fabricFromSku(sku),
+        comment: fields.comment || "",
+        targetQty: fields.targetQty,
+        boxes_to_sew: fields.boxes || 0,
+        product_type: fields.productType,
+      },
+      status: "incoming",
+      cutting_qty: 0,
+      to_sew: fields.qty,
+      shelf: "",
+    },
+    timeout: 10000,
+  });
+}
+
+export async function archiveOrder(order: Order): Promise<void> {
+  if (!WEBHOOK_ARCHIVE) {
+    console.info(`[mock] archiveOrder sku=${order.sku} status=${order.status}`);
+    return;
+  }
+  await ky.post(WEBHOOK_ARCHIVE, {
+    json: {
+      action: "archive",
+      dtId: order.dtId,
+      order: {
+        sku: order.sku,
+        status: order.status,
+        launch_date: order.launchDate,
+        priority: order.priority,
+        size: order.size,
+        to_sew: order.quantity,
+        boxes_to_sew: order.boxes,
+        comment: order.comment || "",
+        cutting_qty: order.cutting_qty || 0,
+        fabric: order.fabric || "",
+        current_available: order.currentAvailable ?? "",
+        target_qty: order.targetQty ?? "",
+      },
+    },
+    timeout: 10000,
+  });
+}
+
+export async function cutToSew(order: Order, qty: number): Promise<void> {
+  if (!WEBHOOK_CUT_TO_SEW) {
+    console.info(`[mock] cutToSew sku=${order.sku} qty=${qty}`);
+    return;
+  }
+  await ky.post(WEBHOOK_CUT_TO_SEW, {
+    json: {
+      dtId: order.dtId,
+      sku: order.sku,
+      size: order.size,
+      qty,
+      order: {
+        sku: order.sku,
+        status: order.status,
+        launch_date: order.launchDate,
+        priority: order.priority,
+        size: order.size,
+        to_sew: qty,
+        boxes_to_sew: order.boxes,
+        comment: order.comment || "",
+        cutting_qty: order.cutting_qty || 0,
+        fabric: order.fabric || "",
+        current_available: order.currentAvailable ?? "",
+        target_qty: order.targetQty ?? "",
+        product_type: order.productType,
+        color: order.color,
+      },
+    },
+    timeout: 15000,
+  });
+}
+
+export async function updateOrderStatus(
+  sku: string,
+  newStatus: OrderStatus,
+  currentStatus?: OrderStatus,
+  extra?: { cutting_qty?: number; shelf?: string; to_sew?: number },
+) {
+  if (!WEBHOOK_STATUS) {
+    console.info(`[mock] Update ${sku} → ${newStatus}`, extra);
+    return;
+  }
+
+  await ky.post(WEBHOOK_STATUS, {
+    json: {
+      order: { sku },
+      status: newStatus,
+      ...(currentStatus ? { current_status: currentStatus } : {}),
+      ...(extra?.cutting_qty !== undefined ? { cutting_qty: extra.cutting_qty } : {}),
+      ...(extra?.shelf !== undefined ? { shelf: extra.shelf } : {}),
+      ...(extra?.to_sew !== undefined ? { to_sew: extra.to_sew } : {}),
+    },
+    timeout: 10000,
+  });
 }

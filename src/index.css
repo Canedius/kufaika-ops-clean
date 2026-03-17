@@ -100,19 +100,17 @@ a {
 
 .nav-link.active {
   color: var(--text);
-  background: linear-gradient(120deg, rgba(31, 122, 236, 0.12), rgba(247, 201, 72, 0.12));
-  border: 1px solid var(--border);
 }
-.nav-link.nav-amber.active svg {
+.nav-link.nav-amber.active {
   color: #c08a00;
 }
-.nav-link.nav-green.active svg {
+.nav-link.nav-green.active {
   color: #0b7b42;
 }
-.nav-link.nav-orange.active svg {
+.nav-link.nav-orange.active {
   color: #c2510a;
 }
-.nav-link.nav-blue.active svg {
+.nav-link.nav-blue.active {
   color: #1a6fc4;
 }
 
@@ -169,7 +167,7 @@ a {
   position: fixed;
   top: 0;
   right: 0;
-  width: 380px;
+  width: 480px;
   max-width: 95vw;
   height: 100vh;
   background: var(--panel);
@@ -213,7 +211,7 @@ a {
   padding: 16px 20px;
 }
 .stock-actions {
-  width: 60px;
+  width: 80px;
   white-space: nowrap;
 }
 .stock-action-btn {
@@ -231,6 +229,27 @@ a {
 }
 .stock-action-btn--save:hover { color: #22c55e; }
 .stock-action-btn--cancel:hover { color: #ef4444; }
+.stock-action-btn--sew:hover { color: var(--accent, #f97316); }
+.stock-spinner-overlay {
+  position: absolute;
+  inset: 0;
+  background: rgba(255,255,255,0.85);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  z-index: 10;
+  font-size: 0.875rem;
+  color: var(--text-muted, #888);
+}
+.stock-spinner {
+  animation: spin 0.8s linear infinite;
+  color: var(--accent, #f97316);
+}
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
 .stock-edit-input {
   width: 64px;
   padding: 2px 6px;
@@ -282,6 +301,82 @@ a {
   0%   { box-shadow: 0 0 0 0 rgba(31, 122, 236, 0.4); transform: scale(1); }
   50%  { box-shadow: 0 0 0 8px rgba(31, 122, 236, 0); transform: scale(1.01); }
   100% { box-shadow: 0 0 0 0 rgba(31, 122, 236, 0); transform: scale(1); }
+}
+
+.card-badge-new {
+  position: absolute;
+  top: 0;
+  right: 0;
+  width: 64px;
+  height: 64px;
+  overflow: hidden;
+  pointer-events: none;
+  z-index: 2;
+}
+.card-badge-new::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  right: 0;
+  border-style: solid;
+  border-width: 0 8px 8px 0;
+  border-color: transparent #15803d transparent transparent;
+  filter: drop-shadow(0 1px 1px rgba(0,0,0,0.3));
+}
+.card-badge-new::after {
+  content: "Новий";
+  position: absolute;
+  top: 12px;
+  right: -18px;
+  width: 80px;
+  text-align: center;
+  font-size: 0.58rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: #fff;
+  background: linear-gradient(135deg, #22c55e 0%, #16a34a 100%);
+  padding: 3px 0;
+  transform: rotate(45deg);
+  box-shadow: 0 2px 4px rgba(0,0,0,0.2), inset 0 1px 0 rgba(255,255,255,0.25);
+}
+
+.card-badge-updated {
+  position: absolute;
+  top: 0;
+  right: 0;
+  width: 64px;
+  height: 64px;
+  overflow: hidden;
+  pointer-events: none;
+  z-index: 2;
+}
+.card-badge-updated::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  right: 0;
+  border-style: solid;
+  border-width: 0 8px 8px 0;
+  border-color: transparent #b45309 transparent transparent;
+  filter: drop-shadow(0 1px 1px rgba(0,0,0,0.3));
+}
+.card-badge-updated::after {
+  content: "Оновлено";
+  position: absolute;
+  top: 12px;
+  right: -18px;
+  width: 80px;
+  text-align: center;
+  font-size: 0.5rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: #fff;
+  background: linear-gradient(135deg, #f59e0b 0%, #d97706 100%);
+  padding: 3px 0;
+  transform: rotate(45deg);
+  box-shadow: 0 2px 4px rgba(0,0,0,0.2), inset 0 1px 0 rgba(255,255,255,0.25);
 }
 
 .nav-link.flame-active svg {
@@ -359,6 +454,7 @@ a {
   display: flex;
   flex-direction: column;
   gap: 12px;
+  overflow: hidden;
 }
 
 .card.compact {
@@ -697,6 +793,7 @@ a {
 .detail-value {
   font-size: 12px;
   font-weight: 600;
+  background: none;
 }
 
 .detail-icon {

@@ -42,6 +42,21 @@ export const OrderCard = ({
   const statusColor = statusTone[order.status];
   const photo = getPhotoUrl(order.sku);
 
+  const badge = (() => {
+    const today = new Date().toISOString().slice(0, 10);
+    const isDateToday = (d?: string) => {
+      if (!d) return false;
+      if (d.length >= 10 && d.slice(0, 10) === today) return true;
+      const parts = d.match(/^(\d{2})\.(\d{2})\.(\d{4})/);
+      return parts ? `${parts[3]}-${parts[2]}-${parts[1]}` === today : false;
+    };
+    const createdToday = isDateToday(order.createdAt) || isDateToday(order.launchDate);
+    const updatedToday = isDateToday(order.updatedAt);
+    if (createdToday) return "new";
+    if (updatedToday) return "updated";
+    return null;
+  })();
+
   const stop = (e: MouseEvent) => e.stopPropagation();
 
   return (
@@ -50,7 +65,10 @@ export const OrderCard = ({
       onClick={() => onSelect?.(order)}
       role="button"
       tabIndex={0}
+      style={{ position: "relative" }}
     >
+      {badge === "new" && <span className="card-badge-new" />}
+      {badge === "updated" && <span className="card-badge-updated" />}
       <div className="card-head">
         <div className="card-head-left">
           {selectable && (

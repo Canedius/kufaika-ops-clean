@@ -1,8 +1,8 @@
 import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { X, RotateCcw, Pencil, Check, X as XIcon } from "lucide-react";
-import { fetchCutStock, updateCutStockQty } from "../lib/api";
-import type { CutStockItem } from "../types";
+import { X, RotateCcw, Pencil, Check, X as XIcon, Shirt, Loader2 } from "lucide-react";
+import { fetchCutStock, updateCutStockQty, consumeFromStock, createCuttingOrder, fabricFromSku, productTypeFromSku, colorNameFromSku } from "../lib/api";
+import type { CutStockItem, Priority } from "../types";
 
 type Props = {
   open: boolean;
@@ -20,6 +20,8 @@ export const StockDrawer = ({ open, onClose }: Props) => {
 
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editQty, setEditQty] = useState<string>("");
+  const [sewModal, setSewModal] = useState<{ item: CutStockItem; qty: number; priority: Priority } | null>(null);
+  const [sewPending, setSewPending] = useState(false);
 
   const updateMutation = useMutation({
     mutationFn: ({ stockId, qty }: { stockId: string; qty: number }) =>
@@ -42,6 +44,52 @@ export const StockDrawer = ({ open, onClose }: Props) => {
   function cancelEdit() {
     setEditingId(null);
     setEditQty("");
+  }
+
+  function handleSewFromStock() {
+    if (!sewModal) return;
+    const { item, qty, priority } = sewModal;
+    setSewModal(null);
+
+    const orderData = {
+      sku: item.sku,
+      size: item.size,
+      launchDate: "",
+      priority,
+      fabric: fabricFromSku(item.sku),
+      comment: `Зі складу крою${item.shelf ? ` (${item.shelf})` : ""}`,
+      targetQty: undefined,
+      boxes: 0,
+      quantity: qty,
+      currentAvailable: undefined,
+      productType: productTypeFromSku(item.sku),
+      color: colorNameFromSku(item.sku),
+    };
+
+    // Оптимістичне оновлення — одразу змінюємо кеш
+    queryClient.setQueryData<CutStockItem[]>(["cutStock"], (prev) => {
+      if (!prev) return prev;
+      const matchKey = item.dtId ? "dtId" : "stockId";
+      const matchVal = item.dtId ?? item.stockId;
+      return prev
+        .map((s) => s[matchKey] === matchVal ? { ...s, qty: s.qty - qty } : s)
+        .filter((s) => s.qty > 0);
+    });
+
+    setSewPending(true);
+
+    Promise.all([
+      createCuttingOrder(orderData, qty, "", "in-progress"),
+      consumeFromStock(item.stockId, qty, item.dtId, item.qty),
+    ]).then(() => {
+      setTimeout(async () => {
+        await queryClient.invalidateQueries({ queryKey: ["cutStock"] });
+        await queryClient.invalidateQueries({ queryKey: ["orders"] });
+        setSewPending(false);
+      }, 3000);
+    }).catch(() => {
+      setSewPending(false);
+    });
   }
 
   function saveEdit(item: CutStockItem) {
@@ -72,7 +120,13 @@ export const StockDrawer = ({ open, onClose }: Props) => {
             </button>
           </div>
         </div>
-        <div className="stock-drawer-body">
+        <div className="stock-drawer-body" style={{ position: "relative" }}>
+          {sewPending && (
+            <div className="stock-spinner-overlay">
+              <Loader2 size={28} className="stock-spinner" />
+              <span>Оновлюю дані...</span>
+            </div>
+          )}
           {isLoading && <p className="muted">Завантажую...</p>}
           {!isLoading && sorted.length === 0 && (
             <p className="muted">Залишків крою немає.</p>
@@ -138,13 +192,22 @@ export const StockDrawer = ({ open, onClose }: Props) => {
                             </button>
                           </>
                         ) : (
-                          <button
-                            className="stock-action-btn"
-                            onClick={() => startEdit(item)}
-                            title="Редагувати"
-                          >
-                            <Pencil size={14} />
-                          </button>
+                          <>
+                            <button
+                              className="stock-action-btn"
+                              onClick={() => startEdit(item)}
+                              title="Редагувати"
+                            >
+                              <Pencil size={14} />
+                            </button>
+                            <button
+                              className="stock-action-btn stock-action-btn--sew"
+                              onClick={() => setSewModal({ item, qty: item.qty, priority: "Низький" })}
+                              title="В пошив"
+                            >
+                              <Shirt size={14} />
+                            </button>
+                          </>
                         )}
                       </td>
                     </tr>
@@ -155,6 +218,50 @@ export const StockDrawer = ({ open, onClose }: Props) => {
           )}
         </div>
       </div>
+
+      {sewModal && (
+        <div className="modal-overlay" style={{ zIndex: 300 }} onClick={() => setSewModal(null)}>
+          <div className="modal" onClick={(e) => e.stopPropagation()}>
+            <div className="modal-title">В пошив — {sewModal.item.sku} ({sewModal.item.size})</div>
+            <div className="modal-field">
+              <label>Кількість (шт)</label>
+              <input
+                type="number"
+                min={1}
+                max={sewModal.item.qty}
+                value={sewModal.qty}
+                autoFocus
+                onChange={(e) => setSewModal((m) => m && { ...m, qty: Math.min(m.item.qty, Math.max(1, Number(e.target.value))) })}
+              />
+              <span className="muted" style={{ fontSize: "12px", marginTop: "4px", display: "block" }}>
+                На складі: {sewModal.item.qty} шт
+              </span>
+            </div>
+            <div className="modal-field">
+              <label>Пріоритет</label>
+              <select
+                value={sewModal.priority}
+                onChange={(e) => setSewModal((m) => m && { ...m, priority: e.target.value as Priority })}
+              >
+                <option value="Низький">Низький</option>
+                <option value="Терміново">Терміново</option>
+                <option value="Критично">Критично</option>
+                <option value="Дефіцит">Дефіцит</option>
+              </select>
+            </div>
+            <div className="modal-actions">
+              <button className="btn ghost" onClick={() => setSewModal(null)}>Скасувати</button>
+              <button
+                className="btn primary"
+                disabled={sewModal.qty < 1 || sewModal.qty > sewModal.item.qty}
+                onClick={handleSewFromStock}
+              >
+                В пошив
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </>
   );
 };

@@ -6,12 +6,13 @@ const SHEET_ID = import.meta.env.VITE_SHEET_ID;
 const API_KEY = import.meta.env.VITE_GOOGLE_API_KEY;
 const ARCHIVE_RANGE = import.meta.env.VITE_ARCHIVE_RANGE || "Archive!A:N";
 const WEBHOOK_STATUS = import.meta.env.VITE_N8N_STATUS_WEBHOOK;
+const WEBHOOK_STATUS_UPDATE = import.meta.env.VITE_N8N_STATUS_UPDATE_WEBHOOK;
 const WEBHOOK_CUTSTOCK = import.meta.env.VITE_N8N_CUTSTOCK_WEBHOOK;
+const WEBHOOK_CUTSTOCK_CONSUME = import.meta.env.VITE_N8N_CUTSTOCK_CONSUME_WEBHOOK;
 const WEBHOOK_ARCHIVE = import.meta.env.VITE_N8N_ARCHIVE_WEBHOOK;
 const WEBHOOK_ORDERS_READ = import.meta.env.VITE_N8N_ORDERS_READ;
 const WEBHOOK_CUTSTOCK_READ = import.meta.env.VITE_N8N_CUTSTOCK_READ;
 const WEBHOOK_ARCHIVE_READ = import.meta.env.VITE_N8N_ARCHIVE_READ;
-const WEBHOOK_CUT_TO_SEW = import.meta.env.VITE_N8N_CUT_TO_SEW_WEBHOOK;
 
 const sheetsClient = ky.create({
   prefixUrl: "https://sheets.googleapis.com/v4/spreadsheets",
@@ -50,7 +51,7 @@ function parseNumber(v: string | undefined): number | undefined {
   return Number.isFinite(n) ? n : undefined;
 }
 
-function colorNameFromSku(sku: string): string {
+export function colorNameFromSku(sku: string): string {
   const code = (sku.match(/^KUF\d{3}([A-Z]{2})/)?.[1] || "").toUpperCase();
   const map: Record<string, string> = {
     BK: "Чорний",
@@ -67,7 +68,7 @@ function colorNameFromSku(sku: string): string {
   return map[code] || code || "";
 }
 
-function productTypeFromSku(sku: string): string {
+export function productTypeFromSku(sku: string): string {
   const prefix = sku.slice(0, 6).toUpperCase();
   const map: Record<string, string> = {
     KUF001: "Худі утеплений",
@@ -213,12 +214,13 @@ export async function updateCutStockQty(stockId: string, qty: number): Promise<v
   await ky.post(WEBHOOK_CUTSTOCK, { json: { action: "update", stockId, qty }, timeout: 10000 });
 }
 
-export async function consumeFromStock(stockId: string, qty: number): Promise<void> {
-  if (!WEBHOOK_CUTSTOCK) {
-    console.info(`[mock] consumeFromStock stockId=${stockId} qty=${qty}`);
+export async function consumeFromStock(stockId: string, qty: number, dtId?: number, currentQty?: number): Promise<void> {
+  const url = WEBHOOK_CUTSTOCK_CONSUME || WEBHOOK_CUTSTOCK;
+  if (!url) {
+    console.info(`[mock] consumeFromStock stockId=${stockId} dtId=${dtId} qty=${qty}`);
     return;
   }
-  await ky.post(WEBHOOK_CUTSTOCK, { json: { action: "consume", stockId, qty }, timeout: 10000 });
+  await ky.post(url, { json: { action: "consume", stockId, dtId, qty, currentQty }, timeout: 10000 });
 }
 
 export async function addToStock(item: Omit<CutStockItem, "stockId" | "status">): Promise<void> {
@@ -230,7 +232,7 @@ export async function addToStock(item: Omit<CutStockItem, "stockId" | "status">)
 }
 
 export async function createCuttingOrder(
-  order: Pick<Order, "sku" | "size" | "launchDate" | "priority" | "fabric" | "comment" | "targetQty" | "boxes" | "quantity" | "currentAvailable">,
+  order: Pick<Order, "sku" | "size" | "launchDate" | "priority" | "fabric" | "comment" | "targetQty" | "boxes" | "quantity" | "currentAvailable" | "productType" | "color">,
   qty: number,
   shelf: string,
   status: OrderStatus = "cutting",
@@ -253,6 +255,8 @@ export async function createCuttingOrder(
         targetQty: order.targetQty,
         boxes_to_sew,
         current_available: order.currentAvailable ?? "",
+        product_type: order.productType || productTypeFromSku(order.sku),
+        color: order.color || colorNameFromSku(order.sku),
       },
       status,
       cutting_qty: qty,
@@ -329,57 +333,26 @@ export async function archiveOrder(order: Order): Promise<void> {
   });
 }
 
-export async function cutToSew(order: Order, qty: number): Promise<void> {
-  if (!WEBHOOK_CUT_TO_SEW) {
-    console.info(`[mock] cutToSew sku=${order.sku} qty=${qty}`);
+export async function updateOrder(
+  dtId: number,
+  currentOrder: Pick<Order, "status" | "quantity" | "cutting_qty" | "boxes" | "shelf">,
+  fields: Partial<{ status: OrderStatus; to_sew: number; cutting_qty: number; boxes_to_sew: number; shelf: string }>,
+): Promise<void> {
+  const updateUrl = WEBHOOK_STATUS_UPDATE || WEBHOOK_STATUS;
+  if (!updateUrl) {
+    console.info(`[mock] updateOrder dtId=${dtId}`, fields);
     return;
   }
-  await ky.post(WEBHOOK_CUT_TO_SEW, {
+  // Завжди шлемо всі 5 полів — інакше DT Update обнулить відсутні
+  await ky.post(updateUrl, {
     json: {
-      dtId: order.dtId,
-      sku: order.sku,
-      size: order.size,
-      qty,
-      order: {
-        sku: order.sku,
-        status: order.status,
-        launch_date: order.launchDate,
-        priority: order.priority,
-        size: order.size,
-        to_sew: qty,
-        boxes_to_sew: order.boxes,
-        comment: order.comment || "",
-        cutting_qty: order.cutting_qty || 0,
-        fabric: order.fabric || "",
-        current_available: order.currentAvailable ?? "",
-        target_qty: order.targetQty ?? "",
-        product_type: order.productType,
-        color: order.color,
-      },
-    },
-    timeout: 15000,
-  });
-}
-
-export async function updateOrderStatus(
-  sku: string,
-  newStatus: OrderStatus,
-  currentStatus?: OrderStatus,
-  extra?: { cutting_qty?: number; shelf?: string; to_sew?: number },
-) {
-  if (!WEBHOOK_STATUS) {
-    console.info(`[mock] Update ${sku} → ${newStatus}`, extra);
-    return;
-  }
-
-  await ky.post(WEBHOOK_STATUS, {
-    json: {
-      order: { sku },
-      status: newStatus,
-      ...(currentStatus ? { current_status: currentStatus } : {}),
-      ...(extra?.cutting_qty !== undefined ? { cutting_qty: extra.cutting_qty } : {}),
-      ...(extra?.shelf !== undefined ? { shelf: extra.shelf } : {}),
-      ...(extra?.to_sew !== undefined ? { to_sew: extra.to_sew } : {}),
+      action: "update",
+      dtId,
+      status: fields.status ?? currentOrder.status,
+      to_sew: fields.to_sew ?? currentOrder.quantity,
+      cutting_qty: fields.cutting_qty ?? (currentOrder.cutting_qty || 0),
+      boxes_to_sew: fields.boxes_to_sew ?? currentOrder.boxes,
+      shelf: fields.shelf ?? (currentOrder.shelf || ""),
     },
     timeout: 10000,
   });

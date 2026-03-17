@@ -1,14 +1,12 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { FilterBar } from "./FilterBar";
 import { OrderCard } from "./OrderCard";
-import { fetchOrders, fetchCutStock, updateOrderStatus, consumeFromStock, addToStock, createCuttingOrder, createIncomingOrder, archiveOrder, cutToSew, formatDate } from "../lib/api";
+import { fetchOrders, fetchCutStock, updateOrder, consumeFromStock, addToStock, createCuttingOrder, createIncomingOrder, archiveOrder, formatDate } from "../lib/api";
 import type { Order, OrderStatus, Priority, CutStockItem } from "../types";
 import { priorityTone, statusLabel, statusTone } from "../theme";
 import { getPhotoUrl } from "../lib/photos";
 import { Info, Shirt, Palette, Ruler, Package, BarChart3, Target, RotateCcw, Scissors, Layers } from "lucide-react";
-
-type CutExtra = { cutting_qty?: number; shelf?: string; to_sew?: number };
 
 type ShelfModal = {
   order: Order;
@@ -62,33 +60,13 @@ export const OrdersPage = ({ filterBy, emptyText, actions }: Props) => {
     refetchOnWindowFocus: false,
   });
 
-  const [localOrders, setLocalOrders] = useState<Order[]>([]);
   const pendingArchiveIds = useRef<Set<string>>(new Set());
+  const orders = data || [];
 
-  useEffect(() => {
-    if (data) {
-      setLocalOrders(data.filter((o) => !pendingArchiveIds.current.has(o.id)));
-    }
-  }, [data]);
-
-  const mutation = useMutation({
-    mutationFn: ({ sku, currentStatus, status, extra }: { id: string; sku: string; currentStatus?: OrderStatus; status: OrderStatus; extra?: CutExtra }) =>
-      status === "archived" ? Promise.resolve() : updateOrderStatus(sku, status, currentStatus, extra),
-    onMutate: (vars) => {
-      const update = (o: Order) => {
-        if (o.id !== vars.id) return o;
-        return {
-          ...o,
-          status: vars.status,
-          ...(vars.extra?.cutting_qty !== undefined ? { cutting_qty: vars.extra.cutting_qty } : {}),
-          ...(vars.extra?.shelf !== undefined ? { shelf: vars.extra.shelf } : {}),
-          ...(vars.extra?.to_sew !== undefined ? { quantity: vars.extra.to_sew } : {}),
-        };
-      };
-      setLocalOrders((prev) => prev.map(update));
-      qc.setQueryData<Order[]>(["orders"], (prev) => (prev || []).map(update));
-    },
-  });
+  const optimisticUpdate = (id: string, patch: Partial<Order>) => {
+    qc.cancelQueries({ queryKey: ["orders"] });
+    qc.setQueryData<Order[]>(["orders"], (prev) => (prev || []).map((o) => (o.id !== id ? o : { ...o, ...patch })));
+  };
 
   const [search, setSearch] = useState("");
   const [priority, setPriority] = useState<Priority | "all">("all");
@@ -121,7 +99,8 @@ export const OrdersPage = ({ filterBy, emptyText, actions }: Props) => {
   }, [cutStock]);
 
   const filtered = useMemo(() => {
-    const base = localOrders.filter((o) => filterBy.includes(o.status));
+    const withoutPending = orders.filter((o) => !pendingArchiveIds.current.has(o.id));
+    const base = withoutPending.filter((o) => filterBy.includes(o.status));
     const byTerm = base.filter((o) =>
       `${o.sku} ${o.color} ${o.productType}`.toLowerCase().includes(search.toLowerCase()),
     );
@@ -132,7 +111,7 @@ export const OrdersPage = ({ filterBy, emptyText, actions }: Props) => {
       return a.sku.localeCompare(b.sku);
     });
     return sorted;
-  }, [localOrders, filterBy, priority, search, sort]);
+  }, [orders, filterBy, priority, search, sort]);
 
   const selected =
     filtered.find((o) => o.id === selectedId) ||
@@ -161,7 +140,11 @@ export const OrdersPage = ({ filterBy, emptyText, actions }: Props) => {
       setPulseId(order.id);
       setTimeout(() => setPulseId(null), 800);
     }
-    mutation.mutate({ id: order.id, sku: order.sku, currentStatus: order.status, status });
+    optimisticUpdate(order.id, { status });
+    if (order.dtId) {
+      updateOrder(order.dtId, order, { status })
+        .then(() => setTimeout(() => qc.invalidateQueries({ queryKey: ["orders"] }), 3000));
+    }
   };
 
   // "В розкрій" — відкриває модал з кількістю
@@ -173,8 +156,30 @@ export const OrdersPage = ({ filterBy, emptyText, actions }: Props) => {
     if (!cutModal) return;
     const { order, qty } = cutModal;
     setCutModal(null);
-    createCuttingOrder(order, qty, "", "cutting")
-      .then(() => setTimeout(() => qc.invalidateQueries({ queryKey: ["orders"] }), 3000));
+    const isFullQty = qty >= order.quantity;
+    console.log("[CUT]", { sku: order.sku, dtId: order.dtId, orderId: order.id, orderQty: order.quantity, cutQty: qty, isFullQty, remainder: order.quantity - qty });
+    if (isFullQty && order.dtId) {
+      // Повне — оновлюємо існуючий рядок
+      optimisticUpdate(order.id, { status: "cutting", cutting_qty: qty });
+      updateOrder(order.dtId, order, { status: "cutting", cutting_qty: qty })
+        .then(() => { console.log("[CUT] full update OK"); setTimeout(() => qc.invalidateQueries({ queryKey: ["orders"] }), 3000); });
+    } else if (order.dtId) {
+      // Часткове — зменшуємо оригінал, створюємо новий рядок для відщепленої частини
+      const remainder = order.quantity - qty;
+      console.log("[CUT] partial: updating dtId", order.dtId, "to_sew →", remainder);
+      optimisticUpdate(order.id, { quantity: remainder });
+      updateOrder(order.dtId, order, { to_sew: remainder })
+        .then(() => { console.log("[CUT] update OK, creating cutting order…"); return createCuttingOrder(order, qty, "", "cutting"); })
+        .then(() => { console.log("[CUT] create OK, invalidating in 3s"); setTimeout(() => qc.invalidateQueries({ queryKey: ["orders"] }), 3000); })
+        .catch((err) => {
+          console.error("[CUT] Partial cut failed:", err);
+          optimisticUpdate(order.id, { quantity: order.quantity });
+          qc.invalidateQueries({ queryKey: ["orders"] });
+        });
+    } else {
+      createCuttingOrder(order, qty, "", "cutting")
+        .then(() => setTimeout(() => qc.invalidateQueries({ queryKey: ["orders"] }), 3000));
+    }
   };
 
   // "На склад" — відкриває модал з qty + shelf
@@ -186,10 +191,23 @@ export const OrdersPage = ({ filterBy, emptyText, actions }: Props) => {
     if (!shelfModal) return;
     const { order, qty } = shelfModal;
     setShelfModal(null);
-    pendingArchiveIds.current.add(order.id);
-    mutation.mutate({ id: order.id, sku: order.sku, currentStatus: order.status, status: "archived" });
+    const maxQty = order.cutting_qty || order.quantity;
+    const isFullQty = qty >= maxQty;
+
     addToStock({ sku: order.sku, size: order.size, qty, shelf: "", cutDate: new Date().toISOString().split("T")[0] });
-    archiveOrder(order);
+
+    if (isFullQty) {
+      // Повне — архівуємо весь ордер
+      pendingArchiveIds.current.add(order.id);
+      optimisticUpdate(order.id, { status: "archived" });
+      archiveOrder(order);
+    } else if (order.dtId) {
+      // Часткове — зменшуємо залишок в розкрої
+      const remainder = maxQty - qty;
+      optimisticUpdate(order.id, { cutting_qty: remainder, quantity: remainder });
+      updateOrder(order.dtId, order, { cutting_qty: remainder, to_sew: remainder });
+    }
+
     setTimeout(() => {
       qc.invalidateQueries({ queryKey: ["cutStock"] });
       qc.invalidateQueries({ queryKey: ["orders"] });
@@ -198,7 +216,7 @@ export const OrdersPage = ({ filterBy, emptyText, actions }: Props) => {
 
   const handleComplete = (order: Order) => {
     pendingArchiveIds.current.add(order.id);
-    mutation.mutate({ id: order.id, sku: order.sku, currentStatus: order.status, status: "archived" });
+    optimisticUpdate(order.id, { status: "archived" });
     archiveOrder(order);
     setTimeout(() => qc.invalidateQueries({ queryKey: ["orders"] }), 3000);
   };
@@ -214,28 +232,42 @@ export const OrdersPage = ({ filterBy, emptyText, actions }: Props) => {
     const { order, qty } = sewModal;
     setSewModal(null);
 
-    // Оптимістичне оновлення картки
-    const newToSew = order.quantity - qty;
-    if (newToSew > 0) {
-      mutation.mutate({ id: order.id, sku: order.sku, currentStatus: "incoming", status: "incoming", extra: { to_sew: newToSew } });
-    } else {
-      mutation.mutate({ id: order.id, sku: order.sku, currentStatus: "incoming", status: "done" });
-    }
-
-    // Фонові API-дзвінки (без await)
+    // Списуємо зі складу крою
     const available = cutStock.filter((s) => s.sku === order.sku && s.size === order.size);
     let remaining = qty;
     for (const item of available) {
       if (remaining <= 0) break;
       const take = Math.min(remaining, item.qty);
-      consumeFromStock(item.stockId, take);
+      consumeFromStock(item.stockId, take, item.dtId, item.qty);
       remaining -= take;
     }
-    createCuttingOrder(order, qty, "", "in-progress")
-      .then(() => setTimeout(() => {
-        qc.invalidateQueries({ queryKey: ["cutStock"] });
-        qc.invalidateQueries({ queryKey: ["orders"] });
-      }, 3000));
+
+    const isFullQty = qty >= order.quantity;
+    if (isFullQty && order.dtId) {
+      // Повне — оновлюємо існуючий рядок на in-progress
+      optimisticUpdate(order.id, { status: "in-progress" });
+      updateOrder(order.dtId, order, { status: "in-progress" })
+        .then(() => setTimeout(() => {
+          qc.invalidateQueries({ queryKey: ["cutStock"] });
+          qc.invalidateQueries({ queryKey: ["orders"] });
+        }, 3000));
+    } else if (order.dtId) {
+      // Часткове — зменшуємо оригінал, створюємо новий in-progress
+      const remainder = order.quantity - qty;
+      optimisticUpdate(order.id, { quantity: remainder });
+      updateOrder(order.dtId, order, { to_sew: remainder });
+      createCuttingOrder(order, qty, "", "in-progress")
+        .then(() => setTimeout(() => {
+          qc.invalidateQueries({ queryKey: ["cutStock"] });
+          qc.invalidateQueries({ queryKey: ["orders"] });
+        }, 3000));
+    } else {
+      createCuttingOrder(order, qty, "", "in-progress")
+        .then(() => setTimeout(() => {
+          qc.invalidateQueries({ queryKey: ["cutStock"] });
+          qc.invalidateQueries({ queryKey: ["orders"] });
+        }, 3000));
+    }
   };
 
   const handleCutToSew = (order: Order) => {
@@ -249,30 +281,20 @@ export const OrdersPage = ({ filterBy, emptyText, actions }: Props) => {
     const remainder = maxQty - qty;
     setCutToSewModal(null);
 
-    if (remainder === 0) {
-      // Відправили все — cutToSew архівує DT рядок і створює in-progress
-      pendingArchiveIds.current.add(order.id);
-      mutation.mutate({ id: order.id, sku: order.sku, currentStatus: order.status, status: "archived" });
-      cutToSew(order, qty)
-        .then(() => setTimeout(() => {
-          qc.invalidateQueries({ queryKey: ["cutStock"] });
-          qc.invalidateQueries({ queryKey: ["orders"] });
-        }, 3000));
-    } else {
-      // Часткова відправка — НЕ викликаємо cutToSew (він видалив би DT рядок)
-      // Оновлюємо DT рядок з меншою кількістю + створюємо in-progress
-      mutation.mutate({
-        id: order.id,
-        sku: order.sku,
-        currentStatus: order.status,
-        status: "cutting",
-        extra: { cutting_qty: remainder, to_sew: remainder },
-      });
+    if (remainder === 0 && order.dtId) {
+      // Повне — оновлюємо статус на in-progress
+      optimisticUpdate(order.id, { status: "in-progress" });
+      updateOrder(order.dtId, order, { status: "in-progress" })
+        .then(() => setTimeout(() => qc.invalidateQueries({ queryKey: ["orders"] }), 3000));
+    } else if (order.dtId) {
+      // Часткове — зменшуємо оригінал, створюємо новий in-progress
+      optimisticUpdate(order.id, { cutting_qty: remainder, quantity: remainder });
+      updateOrder(order.dtId, order, { cutting_qty: remainder, to_sew: remainder });
       createCuttingOrder(order, qty, "", "in-progress")
-        .then(() => setTimeout(() => {
-          qc.invalidateQueries({ queryKey: ["cutStock"] });
-          qc.invalidateQueries({ queryKey: ["orders"] });
-        }, 3000));
+        .then(() => setTimeout(() => qc.invalidateQueries({ queryKey: ["orders"] }), 3000));
+    } else {
+      createCuttingOrder(order, qty, "", "in-progress")
+        .then(() => setTimeout(() => qc.invalidateQueries({ queryKey: ["orders"] }), 3000));
     }
   };
 
@@ -477,9 +499,13 @@ export const OrdersPage = ({ filterBy, emptyText, actions }: Props) => {
               <input
                 type="number"
                 min={1}
+                max={cutModal.order.quantity}
                 value={cutModal.qty}
-                onChange={(e) => setCutModal((m) => m && { ...m, qty: Math.max(1, Number(e.target.value)) })}
+                onChange={(e) => setCutModal((m) => m && { ...m, qty: Math.min(m.order.quantity, Math.max(1, Number(e.target.value))) })}
               />
+              <span className="muted" style={{ fontSize: "12px", marginTop: "4px", display: "block" }}>
+                Всього: {cutModal.order.quantity} шт
+              </span>
             </div>
             <div className="modal-actions">
               <button className="btn ghost" onClick={() => setCutModal(null)}>Скасувати</button>
@@ -521,7 +547,9 @@ export const OrdersPage = ({ filterBy, emptyText, actions }: Props) => {
         );
       })()}
 
-      {shelfModal && (
+      {shelfModal && (() => {
+        const maxQty = shelfModal.order.cutting_qty || shelfModal.order.quantity;
+        return (
         <div className="modal-overlay" onClick={() => setShelfModal(null)}>
           <div className="modal" onClick={(e) => e.stopPropagation()}>
             <div className="modal-title">
@@ -533,16 +561,20 @@ export const OrdersPage = ({ filterBy, emptyText, actions }: Props) => {
               <input
                 type="number"
                 min={1}
+                max={maxQty}
                 value={shelfModal.qty}
-                onChange={(e) => setShelfModal((m) => m && { ...m, qty: Math.max(1, Number(e.target.value)) })}
+                onChange={(e) => setShelfModal((m) => m && { ...m, qty: Math.min(maxQty, Math.max(1, Number(e.target.value))) })}
               />
+              <span className="muted" style={{ fontSize: "12px", marginTop: "4px", display: "block" }}>
+                У розкрої: {maxQty} шт
+              </span>
             </div>
 
             <div className="modal-actions">
               <button className="btn ghost" onClick={() => setShelfModal(null)}>Скасувати</button>
               <button
                 className="btn primary"
-                disabled={shelfModal.qty < 1}
+                disabled={shelfModal.qty < 1 || shelfModal.qty > maxQty}
                 onClick={handleShelfConfirm}
               >
                 Підтвердити
@@ -550,7 +582,8 @@ export const OrdersPage = ({ filterBy, emptyText, actions }: Props) => {
             </div>
           </div>
         </div>
-      )}
+        );
+      })()}
       {cutToSewModal && (() => {
         const maxQty = cutToSewModal.order.cutting_qty || cutToSewModal.order.quantity;
         return (

@@ -31,4 +31,6 @@ export interface Order {
   targetQty?: number;
   cutting_qty?: number;
   shelf?: string;
+  updatedAt?: string;
+  createdAt?: string;
 }

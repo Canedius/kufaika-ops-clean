@@ -629,9 +629,6 @@ export const OrdersPage = ({ filterBy, emptyText, actions }: Props) => {
           ? COLOR_CATALOG.filter((c) => selectedProduct.colors.includes(c.code))
           : COLOR_CATALOG;
         const availableSizes = selectedProduct?.sizes ?? [];
-        const autoSku = newOrderForm.productCode && newOrderForm.colorCode && newOrderForm.size
-          ? `${newOrderForm.productCode}${newOrderForm.colorCode}${newOrderForm.size}`
-          : "";
         const canSubmit = !!selectedProduct && !!newOrderForm.colorCode && !!newOrderForm.size && newOrderForm.qty >= 1;
         return (
           <div className="modal-overlay" onClick={() => setNewOrderOpen(false)}>

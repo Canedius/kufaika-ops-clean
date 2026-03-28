@@ -1,5 +1,9 @@
 export type Priority = "Критично" | "Терміново" | "Низький" | "Дефіцит";
 
+export type SortField = "priority" | "date" | "sku" | "size";
+export type SortDir = "asc" | "desc";
+export interface SortLevel { field: SortField; dir: SortDir; }
+
 export interface CutStockItem {
   stockId: string;
   dtId?: number;

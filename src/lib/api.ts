@@ -14,6 +14,29 @@ const WEBHOOK_ORDERS_READ = import.meta.env.VITE_N8N_ORDERS_READ;
 const WEBHOOK_CUTSTOCK_READ = import.meta.env.VITE_N8N_CUTSTOCK_READ;
 const WEBHOOK_ARCHIVE_READ = import.meta.env.VITE_N8N_ARCHIVE_READ;
 
+export const COLOR_CATALOG = [
+  { code: "BK", name: "Чорний",        hex: "#1c1c1c" },
+  { code: "WH", name: "Білий",         hex: "#f0ece8" },
+  { code: "GF", name: "Сірий грі",     hex: "#8a8a8a" },
+  { code: "PK", name: "Ніжно-рожевий", hex: "#f4a7b9" },
+  { code: "KH", name: "Хакі",          hex: "#5c6e3a" },
+  { code: "NU", name: "Бежевий",       hex: "#c9aa87" },
+  { code: "GB", name: "Графітовий",    hex: "#4a4a4a" },
+  { code: "KT", name: "Койот",         hex: "#9e7b4f" },
+  { code: "OG", name: "Олива",         hex: "#6b7a2e" },
+];
+
+export const PRODUCT_CATALOG = [
+  { code: "KUF001", name: "Худі утеплений",    colors: ["BK", "WH", "NU", "GF", "KH", "PK"], sizes: ["XS", "S", "M", "L", "XL", "XXL", "3XL"] },
+  { code: "KUF002", name: "Худі легкий",        colors: ["BK"],                                sizes: ["XS", "S", "M", "L", "XL", "XXL", "3XL"] },
+  { code: "KUF004", name: "Світшот утеплений", colors: ["BK"],                                sizes: ["XS", "S", "M", "L", "XL", "XXL"] },
+  { code: "KUF005", name: "Світшот легкий",    colors: ["BK"],                                sizes: ["XS", "S", "M", "L", "XL", "XXL"] },
+  { code: "KUF006", name: "Футболка Premium",  colors: ["BK", "WH", "PK", "KT", "OG", "GB", "NU"], sizes: ["XS", "S", "M", "L", "XL", "XXL", "3XL"] },
+  { code: "KUF007", name: "Футболка Oversize", colors: ["BK", "WH"],                          sizes: ["XS/S", "M/L", "XL/XXL"] },
+  { code: "KUF008", name: "Футболка Relaxed",  colors: ["BK", "WH"],                          sizes: ["XS/S", "M/L", "XL/2XL"] },
+  { code: "KUF009", name: "Футболка Lightness", colors: ["BK", "WH"],                          sizes: ["XS", "S", "M", "L", "XL", "XXL"] },
+];
+
 const sheetsClient = ky.create({
   prefixUrl: "https://sheets.googleapis.com/v4/spreadsheets",
   retry: { limit: 2, methods: ["get"] },
@@ -72,12 +95,13 @@ export function productTypeFromSku(sku: string): string {
   const prefix = sku.slice(0, 6).toUpperCase();
   const map: Record<string, string> = {
     KUF001: "Худі утеплений",
+    KUF002: "Худі легкий",
     KUF004: "Світшот утеплений",
     KUF005: "Світшот легкий",
     KUF006: "Футболка Premium",
     KUF007: "Футболка Oversize",
     KUF008: "Футболка Relaxed",
-    KUF009: "Футболка",
+    KUF009: "Футболка Lightness",
   };
   return map[prefix] || "";
 }

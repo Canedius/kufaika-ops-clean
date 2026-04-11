@@ -1,4 +1,4 @@
-import { StrictMode } from "react";
+import { StrictMode, lazy, Suspense } from "react";
 import { createRoot } from "react-dom/client";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { ReactQueryDevtools } from "@tanstack/react-query-devtools";
@@ -7,6 +7,8 @@ import App from "./App";
 import "./index.css";
 import { OrdersPage } from "./components/OrdersPage";
 import { ArchivePage } from "./components/ArchivePage";
+
+const AnalyticsPage = lazy(() => import("./components/AnalyticsPage").then((m) => ({ default: m.AnalyticsPage })));
 
 const qc = new QueryClient();
 
@@ -53,6 +55,10 @@ const router = createBrowserRouter([
         path: "done",
         element: <ArchivePage key="done" />,
       },
+      {
+        path: "analytics",
+        element: <Suspense fallback={<div className="muted" style={{ padding: 24 }}>Завантажую аналітику...</div>}><AnalyticsPage key="analytics" /></Suspense>,
+      },
     ],
   },
 ]);
@@ -61,7 +67,7 @@ createRoot(document.getElementById("root")!).render(
   <StrictMode>
     <QueryClientProvider client={qc}>
       <RouterProvider router={router} />
-      <ReactQueryDevtools initialIsOpen={false} />
+      {import.meta.env.DEV && <ReactQueryDevtools initialIsOpen={false} />}
     </QueryClientProvider>
   </StrictMode>,
 );

@@ -21,7 +21,7 @@ export const COLOR_CATALOG = [
   { code: "PK", name: "Ніжно-рожевий", hex: "#f4a7b9" },
   { code: "KH", name: "Хакі",          hex: "#5c6e3a" },
   { code: "NU", name: "Бежевий",       hex: "#c9aa87" },
-  { code: "GB", name: "Графітовий",    hex: "#4a4a4a" },
+  { code: "GB", name: "Сірий",          hex: "#4a4a4a" },
   { code: "KT", name: "Койот",         hex: "#9e7b4f" },
   { code: "OG", name: "Олива",         hex: "#6b7a2e" },
 ];
@@ -83,7 +83,7 @@ export function colorNameFromSku(sku: string): string {
     KH: "Хакі",
     NU: "Бежевий",
     WH: "Білий",
-    GB: "Графітовий",
+    GB: "Сірий",
     KT: "Койот",
     OG: "Олива",
     KZ: "Кремовий",
@@ -190,7 +190,7 @@ export async function fetchOrders(): Promise<Order[]> {
       .map((o) => ({
         ...o,
         size: o.size || o.sku.match(/^KUF\d{3}[A-Z]{2}(.*)/i)?.[1] || "",
-        color: o.color || colorNameFromSku(o.sku),
+        color: (o.color || colorNameFromSku(o.sku)).replace("Графітовий", "Сірий"),
         productType: o.productType || productTypeFromSku(o.sku),
       }));
   } catch (err) {

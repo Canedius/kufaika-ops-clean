@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { NavLink } from "react-router-dom";
-import { Flame, Clock, CheckCircle, Scissors, Layers } from "lucide-react";
+import { Flame, Clock, CheckCircle, Scissors, Layers, BarChart3 } from "lucide-react";
 import { StockDrawer } from "./StockDrawer";
 
 const links = [
@@ -8,6 +8,7 @@ const links = [
   { to: "/cutting", label: "В розкрої", icon: Scissors, flame: false, colorClass: "nav-orange" },
   { to: "/in-progress", label: "Взято в роботу", icon: Clock, flame: false, colorClass: "nav-amber" },
   { to: "/done", label: "Виготовлено", icon: CheckCircle, flame: false, colorClass: "nav-green" },
+  { to: "/analytics", label: "Аналіз", icon: BarChart3, flame: false, colorClass: "nav-purple" },
 ];
 
 export const TopNav = () => {

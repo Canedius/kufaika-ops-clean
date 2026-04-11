@@ -509,9 +509,8 @@ export const OrdersPage = ({ filterBy, emptyText, actions }: Props) => {
               <input
                 type="number"
                 min={1}
-                max={cutModal.order.quantity}
                 value={cutModal.qty}
-                onChange={(e) => setCutModal((m) => m && { ...m, qty: Math.min(m.order.quantity, Math.max(1, Number(e.target.value))) })}
+                onChange={(e) => setCutModal((m) => m && { ...m, qty: Math.max(1, Number(e.target.value)) })}
               />
               <span className="muted" style={{ fontSize: "12px", marginTop: "4px", display: "block" }}>
                 Всього: {cutModal.order.quantity} шт

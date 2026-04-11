@@ -7,7 +7,7 @@ import {
 import { Download, Printer } from "lucide-react";
 import { fetchOrders } from "../lib/api";
 import { useExcelExport } from "../hooks/useExcelExport";
-import type { Order, Priority, OrderStatus } from "../types";
+import type { Order, Priority } from "../types";
 
 const SIZE_COLUMNS = ["XS", "XS/S", "S", "M", "M/L", "L", "XL", "XL/2XL", "2XL", "3XL"];
 
@@ -263,7 +263,7 @@ export const AnalyticsPage = () => {
                 <YAxis type="category" dataKey="name" tick={{ fontSize: 12 }} width={110} />
                 <Tooltip
                   contentStyle={{ borderRadius: 8, fontSize: 13 }}
-                  formatter={(v: number) => [`${v.toLocaleString()} шт.`, "Кількість"]}
+                  formatter={(v) => [`${Number(v).toLocaleString()} шт.`, "Кількість"]}
                 />
                 <Bar dataKey="qty" radius={[0, 4, 4, 0]}>
                   {barData.map((_, i) => (
@@ -295,7 +295,7 @@ export const AnalyticsPage = () => {
                     <Cell key={i} fill={entry.color} />
                   ))}
                 </Pie>
-                <Tooltip formatter={(v: number) => [`${v.toLocaleString()} шт.`, "Кількість"]} />
+                <Tooltip formatter={(v) => [`${Number(v).toLocaleString()} шт.`, "Кількість"]} />
                 <Legend />
               </PieChart>
             </ResponsiveContainer>

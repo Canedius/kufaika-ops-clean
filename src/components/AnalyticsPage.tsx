@@ -4,7 +4,7 @@ import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Cell,
   PieChart, Pie, Legend,
 } from "recharts";
-import { Download, Printer } from "lucide-react";
+import { Download, Printer, ArrowUp, ArrowDown } from "lucide-react";
 import { fetchOrders } from "../lib/api";
 import { useExcelExport } from "../hooks/useExcelExport";
 import type { Order, Priority } from "../types";
@@ -103,8 +103,7 @@ function useAnalyticsData(orders: Order[]) {
       .map((row) => {
         row.totalQty = Object.values(row.sizes).reduce((s, c) => s + c.total, 0);
         return row;
-      })
-      .sort((a, b) => b.totalQty - a.totalQty);
+      });
 
     // --- Bar chart: qty by product type ---
     const productMap = new Map<string, number>();
@@ -192,6 +191,31 @@ export const AnalyticsPage = () => {
     useAnalyticsData(orders);
   const { exportToExcel, exporting } = useExcelExport();
 
+  const [sortKey, setSortKey] = useState<"name" | "qty">("qty");
+  const [sortDir, setSortDir] = useState<"asc" | "desc">("desc");
+
+  const sortedMatrixRows = useMemo(() => {
+    const rows = [...matrixRows];
+    const dir = sortDir === "asc" ? 1 : -1;
+    rows.sort((a, b) => {
+      if (sortKey === "name") return a.label.localeCompare(b.label, "uk") * dir;
+      return (a.totalQty - b.totalQty) * dir;
+    });
+    return rows;
+  }, [matrixRows, sortKey, sortDir]);
+
+  const toggleSort = (key: "name" | "qty") => {
+    if (sortKey === key) {
+      setSortDir((d) => (d === "asc" ? "desc" : "asc"));
+    } else {
+      setSortKey(key);
+      setSortDir(key === "name" ? "asc" : "desc");
+    }
+  };
+
+  const SortIcon = ({ active }: { active: boolean }) =>
+    !active ? null : sortDir === "asc" ? <ArrowUp size={12} /> : <ArrowDown size={12} />;
+
   if (isLoading) return <div className="muted">Завантажую...</div>;
 
   return (
@@ -230,15 +254,29 @@ export const AnalyticsPage = () => {
           <table className="matrix-table">
             <thead>
               <tr>
-                <th className="matrix-header matrix-header--label">Виріб</th>
-                <th className="matrix-header matrix-header--total">Всього</th>
+                <th
+                  className="matrix-header matrix-header--label matrix-header--sortable"
+                  onClick={() => toggleSort("name")}
+                >
+                  <span className="matrix-header-inner">
+                    Виріб <SortIcon active={sortKey === "name"} />
+                  </span>
+                </th>
+                <th
+                  className="matrix-header matrix-header--total matrix-header--sortable"
+                  onClick={() => toggleSort("qty")}
+                >
+                  <span className="matrix-header-inner matrix-header-inner--center">
+                    Всього <SortIcon active={sortKey === "qty"} />
+                  </span>
+                </th>
                 {SIZE_COLUMNS.map((s) => (
                   <th key={s} className="matrix-header">{s}</th>
                 ))}
               </tr>
             </thead>
             <tbody>
-              {matrixRows.map((row) => (
+              {sortedMatrixRows.map((row) => (
                 <tr key={row.label}>
                   <td className="matrix-label">{row.label}</td>
                   <td className="matrix-total-col">{row.totalQty}</td>

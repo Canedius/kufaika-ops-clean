@@ -18,16 +18,16 @@ export const StockDrawer = ({ open, onClose }: Props) => {
     enabled: open,
   });
 
-  const [editingId, setEditingId] = useState<string | null>(null);
+  const [editingDtId, setEditingDtId] = useState<number | null>(null);
   const [editQty, setEditQty] = useState<string>("");
   const [sewModal, setSewModal] = useState<{ item: CutStockItem; qty: number; priority: Priority } | null>(null);
   const [sewPending, setSewPending] = useState(false);
 
   const updateMutation = useMutation({
-    mutationFn: ({ stockId, qty }: { stockId: string; qty: number }) =>
-      updateCutStockQty(stockId, qty),
+    mutationFn: ({ dtId, qty }: { dtId: number; qty: number }) =>
+      updateCutStockQty(dtId, qty),
     onSuccess: () => {
-      setEditingId(null);
+      setEditingDtId(null);
       setTimeout(() => queryClient.invalidateQueries({ queryKey: ["cutStock"] }), 2000);
     },
   });
@@ -37,12 +37,12 @@ export const StockDrawer = ({ open, onClose }: Props) => {
   );
 
   function startEdit(item: CutStockItem) {
-    setEditingId(item.stockId);
+    setEditingDtId(item.dtId ?? null);
     setEditQty(String(item.qty));
   }
 
   function cancelEdit() {
-    setEditingId(null);
+    setEditingDtId(null);
     setEditQty("");
   }
 
@@ -94,8 +94,8 @@ export const StockDrawer = ({ open, onClose }: Props) => {
 
   function saveEdit(item: CutStockItem) {
     const qty = parseInt(editQty, 10);
-    if (isNaN(qty) || qty < 0) return;
-    updateMutation.mutate({ stockId: item.stockId, qty });
+    if (isNaN(qty) || qty < 0 || item.dtId == null) return;
+    updateMutation.mutate({ dtId: item.dtId, qty });
   }
 
   if (!open) return null;
@@ -135,6 +135,8 @@ export const StockDrawer = ({ open, onClose }: Props) => {
             <table className="stock-table">
               <thead>
                 <tr>
+                  <th>Виріб</th>
+                  <th>Колір</th>
                   <th>SKU</th>
                   <th>Розмір</th>
                   <th>Полиця</th>
@@ -144,12 +146,12 @@ export const StockDrawer = ({ open, onClose }: Props) => {
               </thead>
               <tbody>
                 {sorted.map((item) => {
-                  const isEditing = editingId === item.stockId;
-                  const isSaving =
-                    updateMutation.isPending &&
-                    editingId === item.stockId;
+                  const isEditing = editingDtId !== null && editingDtId === item.dtId;
+                  const isSaving = updateMutation.isPending && isEditing;
                   return (
-                    <tr key={item.stockId} className={isEditing ? "stock-row--editing" : ""}>
+                    <tr key={item.dtId ?? `${item.sku}-${item.size}-${item.shelf}`} className={isEditing ? "stock-row--editing" : ""}>
+                      <td className="stock-product">{productTypeFromSku(item.sku) || "—"}</td>
+                      <td className="stock-color">{colorNameFromSku(item.sku) || "—"}</td>
                       <td className="stock-sku">{item.sku}</td>
                       <td>{item.size}</td>
                       <td className="muted">{item.shelf || "—"}</td>

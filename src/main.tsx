@@ -10,7 +10,16 @@ import { ArchivePage } from "./components/ArchivePage";
 
 const AnalyticsPage = lazy(() => import("./components/AnalyticsPage").then((m) => ({ default: m.AnalyticsPage })));
 
-const qc = new QueryClient();
+const qc = new QueryClient({
+  defaultOptions: {
+    queries: {
+      staleTime: 60_000,
+      refetchInterval: 2 * 60_000,
+      refetchIntervalInBackground: false,
+      refetchOnWindowFocus: true,
+    },
+  },
+});
 
 const router = createBrowserRouter([
   {

@@ -153,6 +153,15 @@ a {
 .stock-sku {
   font-family: monospace;
   font-weight: 600;
+  font-size: 0.8rem;
+  color: var(--muted);
+}
+.stock-product {
+  font-weight: 600;
+  white-space: nowrap;
+}
+.stock-color {
+  white-space: nowrap;
 }
 .stock-qty {
   font-weight: 600;
@@ -170,7 +179,7 @@ a {
   position: fixed;
   top: 0;
   right: 0;
-  width: 480px;
+  width: 960px;
   max-width: 95vw;
   height: 100vh;
   background: var(--panel);
@@ -1137,6 +1146,26 @@ a {
   min-width: 60px;
 }
 
+.matrix-header--sortable {
+  cursor: pointer;
+  user-select: none;
+  transition: color 0.15s;
+}
+
+.matrix-header--sortable:hover {
+  color: var(--text);
+}
+
+.matrix-header-inner {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.matrix-header-inner--center {
+  justify-content: center;
+}
+
 .matrix-label {
   padding: 8px 12px;
   font-weight: 500;
@@ -1236,7 +1265,7 @@ a {
 @media print {
   html, body { background: white !important; min-height: 0 !important; height: auto !important; overflow: visible !important; }
   body > *:not(#root), aside, iframe { display: none !important; height: 0 !important; overflow: hidden !important; }
-  .topnav, .analytics-summary, .analytics-charts,
+  .topnav, .analytics-charts,
   .analytics-subtitle, .btn, .matrix-tooltip,
   .tsqd-open-btn-container, .tsqd-parent-container,
   .back-to-top { display: none !important; height: 0 !important; }

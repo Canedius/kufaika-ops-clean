@@ -153,6 +153,9 @@ async function fetchRange(range: string, forcedStatus?: OrderStatus): Promise<Or
     const id = `${baseId}-${sku}-${i}`;
 
     const priority = (get("priority") || "Низький") as Priority;
+    const rawComment = get("comment") || "";
+    const individual = rawComment.startsWith(INDIVIDUAL_MARK);
+    const comment = individual ? rawComment.slice(INDIVIDUAL_MARK.length).trim() : rawComment;
 
     orders.push({
       id,
@@ -165,7 +168,8 @@ async function fetchRange(range: string, forcedStatus?: OrderStatus): Promise<Or
       priority,
       status,
       launchDate: get("launch_date") || "",
-      comment: get("comment") || "",
+      comment,
+      individual,
       currentAvailable: parseNumber(get("current_available")),
       targetQty: parseNumber(get("target_qty")),
       fabric: get("fabric") || fabricFromSku(sku),
@@ -187,12 +191,18 @@ export async function fetchOrders(): Promise<Order[]> {
     console.info("[n8n cache] fetched orders", orders.length);
     return orders
       .filter((o) => o.status !== "archived")
-      .map((o) => ({
-        ...o,
-        size: o.size || o.sku.match(/^KUF\d{3}[A-Z]{2}(.*)/i)?.[1] || "",
-        color: (o.color || colorNameFromSku(o.sku)).replace("Графітовий", "Сірий"),
-        productType: o.productType || productTypeFromSku(o.sku),
-      }));
+      .map((o) => {
+        const rawComment = o.comment || "";
+        const markedInd = rawComment.startsWith(INDIVIDUAL_MARK);
+        return {
+          ...o,
+          size: o.size || o.sku.match(/^KUF\d{3}[A-Z]{2}(.*)/i)?.[1] || "",
+          color: (o.color || colorNameFromSku(o.sku)).replace("Графітовий", "Сірий"),
+          productType: o.productType || productTypeFromSku(o.sku),
+          comment: markedInd ? rawComment.slice(INDIVIDUAL_MARK.length).trim() : rawComment,
+          individual: o.individual || markedInd,
+        };
+      });
   } catch (err) {
     console.error("Failed to fetch orders from n8n cache", err);
     return mockOrders;
@@ -291,6 +301,8 @@ export async function createCuttingOrder(
   });
 }
 
+export const INDIVIDUAL_MARK = "[ІНД]";
+
 export async function createIncomingOrder(fields: {
   productType: string;
   size: string;
@@ -300,25 +312,33 @@ export async function createIncomingOrder(fields: {
   boxes?: number;
   comment?: string;
   targetQty?: number;
+  color?: string;
+  launchDate?: string;
+  individual?: boolean;
 }): Promise<void> {
   if (!WEBHOOK_STATUS) {
     console.info(`[mock] createIncomingOrder`, fields);
     return;
   }
   const sku = fields.sku || "";
+  const launchIso = fields.launchDate || new Date().toISOString();
+  const baseComment = fields.comment || "";
+  const comment = fields.individual ? `${INDIVIDUAL_MARK} ${baseComment}`.trim() : baseComment;
   await ky.post(WEBHOOK_STATUS, {
     json: {
       action: "create",
       order: {
         sku,
         size: fields.size,
-        launchDate: formatDate(new Date().toISOString()),
+        launchDate: formatDate(launchIso),
         priority: fields.priority,
         fabric: fabricFromSku(sku),
-        comment: fields.comment || "",
+        comment,
+        individual: !!fields.individual,
         targetQty: fields.targetQty,
         boxes_to_sew: fields.boxes || 0,
         product_type: fields.productType,
+        color: fields.color || colorNameFromSku(sku),
       },
       status: "incoming",
       cutting_qty: 0,

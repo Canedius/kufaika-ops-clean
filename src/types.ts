@@ -37,4 +37,5 @@ export interface Order {
   shelf?: string;
   updatedAt?: string;
   createdAt?: string;
+  individual?: boolean;
 }

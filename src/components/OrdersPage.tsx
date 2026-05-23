@@ -20,12 +20,29 @@ type CutToSewModal = { order: Order; qty: number };
 type NewOrderForm = {
   productCode: string;
   colorCode: string;
+  customColorName: string;
   size: string;
   qty: number;
-  priority: Priority;
   sku: string; // manual override; empty = auto-generated
   comment: string;
+  dueDate: string; // YYYY-MM-DD — на яке число пошити
 };
+
+const todayIso = () => {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+};
+
+const emptyNewOrderForm = (): NewOrderForm => ({
+  productCode: "",
+  colorCode: "",
+  customColorName: "",
+  size: "",
+  qty: 1,
+  sku: "",
+  comment: "",
+  dueDate: todayIso(),
+});
 
 type Props = {
   filterBy: OrderStatus[];
@@ -80,9 +97,7 @@ export const OrdersPage = ({ filterBy, emptyText, actions }: Props) => {
   const [sewModal, setSewModal] = useState<SewModal | null>(null);
   const [cutToSewModal, setCutToSewModal] = useState<CutToSewModal | null>(null);
   const [newOrderOpen, setNewOrderOpen] = useState(false);
-  const [newOrderForm, setNewOrderForm] = useState<NewOrderForm>({
-    productCode: "", colorCode: "", size: "", qty: 1, priority: "Низький", sku: "", comment: "",
-  });
+  const [newOrderForm, setNewOrderForm] = useState<NewOrderForm>(emptyNewOrderForm);
 
   useEffect(() => {
     setBulkSelected(new Set());
@@ -109,7 +124,7 @@ export const OrdersPage = ({ filterBy, emptyText, actions }: Props) => {
     const sorted = [...byPr].sort((a, b) => {
       for (const { field, dir } of sorts) {
         let cmp = 0;
-        if (field === "priority") cmp = priorityWeight(a.priority) - priorityWeight(b.priority);
+        if (field === "priority") cmp = priorityWeight(a) - priorityWeight(b);
         else if (field === "date") cmp = new Date(a.launchDate).getTime() - new Date(b.launchDate).getTime();
         else if (field === "sku") cmp = a.sku.localeCompare(b.sku);
         else if (field === "size") cmp = sizeWeight(a.size) - sizeWeight(b.size);
@@ -308,18 +323,25 @@ export const OrdersPage = ({ filterBy, emptyText, actions }: Props) => {
   const handleNewOrderConfirm = () => {
     const f = newOrderForm;
     const product = PRODUCT_CATALOG.find((p) => p.code === f.productCode);
-    if (!product || !f.colorCode || !f.size || f.qty < 1) return;
-    const autoSku = `${f.productCode}${f.colorCode}${f.size}`;
+    const customName = f.customColorName.trim();
+    const effectiveColorCode = customName ? "XX" : f.colorCode;
+    if (!product || (!customName && !f.colorCode) || !f.size || f.qty < 1) return;
+    const catalogName = COLOR_CATALOG.find((c) => c.code === f.colorCode)?.name;
+    const effectiveColorName = customName || catalogName || effectiveColorCode;
+    const autoSku = `${f.productCode}${effectiveColorCode}${f.size}`;
     const effectiveSku = f.sku.trim() || autoSku;
     setNewOrderOpen(false);
-    setNewOrderForm({ productCode: "", colorCode: "", size: "", qty: 1, priority: "Низький", sku: "", comment: "" });
+    setNewOrderForm(emptyNewOrderForm());
     createIncomingOrder({
       productType: product.name,
       size: f.size,
       qty: f.qty,
-      priority: f.priority,
+      priority: "Низький",
       sku: effectiveSku,
+      color: effectiveColorName,
+      launchDate: f.dueDate,
       comment: f.comment.trim() || undefined,
+      individual: true,
     }).then(() => setTimeout(() => qc.invalidateQueries({ queryKey: ["orders"] }), 3000));
   };
 
@@ -628,7 +650,9 @@ export const OrdersPage = ({ filterBy, emptyText, actions }: Props) => {
           ? COLOR_CATALOG.filter((c) => selectedProduct.colors.includes(c.code))
           : COLOR_CATALOG;
         const availableSizes = selectedProduct?.sizes ?? [];
-        const canSubmit = !!selectedProduct && !!newOrderForm.colorCode && !!newOrderForm.size && newOrderForm.qty >= 1;
+        const customName = newOrderForm.customColorName.trim();
+        const hasColor = !!customName || !!newOrderForm.colorCode;
+        const canSubmit = !!selectedProduct && hasColor && !!newOrderForm.size && newOrderForm.qty >= 1;
         return (
           <div className="modal-overlay" onClick={() => setNewOrderOpen(false)}>
             <div className="modal modal--new-order" onClick={(e) => e.stopPropagation()}>
@@ -652,9 +676,14 @@ export const OrdersPage = ({ filterBy, emptyText, actions }: Props) => {
                 <div className="modal-field">
                   <label>
                     Колір *
-                    {newOrderForm.colorCode && (
+                    {!customName && newOrderForm.colorCode && (
                       <span className="modal-selected-label">
                         {availableColors.find(c => c.code === newOrderForm.colorCode)?.name}
+                      </span>
+                    )}
+                    {customName && (
+                      <span className="modal-selected-label">
+                        {customName} (свій)
                       </span>
                     )}
                   </label>
@@ -663,14 +692,22 @@ export const OrdersPage = ({ filterBy, emptyText, actions }: Props) => {
                       <button
                         key={c.code}
                         type="button"
-                        className={`color-swatch${newOrderForm.colorCode === c.code ? " color-swatch--active" : ""}`}
+                        className={`color-swatch${!customName && newOrderForm.colorCode === c.code ? " color-swatch--active" : ""}`}
                         style={{ background: c.hex }}
                         title={c.name}
                         disabled={!selectedProduct}
-                        onClick={() => setNewOrderForm((f) => ({ ...f, colorCode: c.code, sku: "" }))}
+                        onClick={() => setNewOrderForm((f) => ({ ...f, colorCode: c.code, customColorName: "", sku: "" }))}
                       />
                     ))}
                   </div>
+                  <input
+                    className="custom-color-input"
+                    type="text"
+                    placeholder="Або введіть свій колір…"
+                    value={newOrderForm.customColorName}
+                    disabled={!selectedProduct}
+                    onChange={(e) => setNewOrderForm((f) => ({ ...f, customColorName: e.target.value, sku: "" }))}
+                  />
                 </div>
                 <div className="modal-field">
                   <label>Розмір *</label>
@@ -698,18 +735,12 @@ export const OrdersPage = ({ filterBy, emptyText, actions }: Props) => {
                   />
                 </div>
                 <div className="modal-field">
-                  <label>Пріоритет *</label>
-                  <select
-                    className="select"
-                    style={{ color: PRIORITY_STYLE[newOrderForm.priority].color }}
-                    value={newOrderForm.priority}
-                    onChange={(e) => setNewOrderForm((f) => ({ ...f, priority: e.target.value as Priority }))}
-                  >
-                    <option value="Низький"   style={{ color: "#0b7b42" }}>Низький</option>
-                    <option value="Терміново" style={{ color: "#c08a00" }}>Терміново</option>
-                    <option value="Критично"  style={{ color: "#c92b36" }}>Критично</option>
-                    <option value="Дефіцит"   style={{ color: "#6934d8" }}>Дефіцит</option>
-                  </select>
+                  <label>На яке число пошити *</label>
+                  <input
+                    type="date"
+                    value={newOrderForm.dueDate}
+                    onChange={(e) => setNewOrderForm((f) => ({ ...f, dueDate: e.target.value }))}
+                  />
                 </div>
               </div>
 
@@ -737,15 +768,17 @@ export const OrdersPage = ({ filterBy, emptyText, actions }: Props) => {
   );
 };
 
-const PRIORITY_STYLE: Record<Priority, React.CSSProperties> = {
-  Низький:   { background: "rgba(18,164,84,0.14)",  color: "#0b7b42" },
-  Терміново: { background: "rgba(192,138,0,0.14)",  color: "#c08a00" },
-  Критично:  { background: "rgba(230,57,70,0.14)",  color: "#c92b36" },
-  Дефіцит:   { background: "rgba(139,92,246,0.14)", color: "#6934d8" },
+const priorityWeight = (o: Order) => {
+  if (o.individual) {
+    const ts = new Date(o.launchDate).getTime();
+    if (Number.isFinite(ts)) {
+      // Closer due date → higher weight (sorted higher in desc mode)
+      return 1e15 - ts;
+    }
+    return 1e15;
+  }
+  return ({ Дефіцит: 4, Критично: 3, Терміново: 2, Низький: 1 }[o.priority] ?? 0);
 };
-
-const priorityWeight = (p: Priority) =>
-  ({ Дефіцит: 4, Критично: 3, Терміново: 2, Низький: 1 }[p] ?? 0);
 
 const SIZE_ORDER = ["XS", "S", "M", "L", "XL", "XXL", "2XL", "XXXL", "3XL", "4XL", "XXXXL", "5XL"];
 const sizeWeight = (s: string) => {

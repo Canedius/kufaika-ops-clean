@@ -18,22 +18,37 @@ const SIZE_NORMALIZE: Record<string, string> = {
   "XXL": "2XL", "2XL": "2XL", "3XL": "3XL", "4XL": "4XL",
 };
 
-const PRIORITY_RANK: Record<Priority, number> = {
-  "Критично": 0, "Терміново": 1, "Дефіцит": 2, "Низький": 3,
+type PriorityKey = Priority | "Індивід";
+
+const PRIORITY_RANK: Record<PriorityKey, number> = {
+  "Індивід": -1, "Критично": 0, "Терміново": 1, "Дефіцит": 2, "Низький": 3,
 };
 
-const PRIORITY_COLOR: Record<Priority, string> = {
+const PRIORITY_COLOR: Record<PriorityKey, string> = {
+  "Індивід": "#c92b36",
   "Критично": "#e63946",
   "Терміново": "#f7c948",
   "Дефіцит": "#8b5cf6",
   "Низький": "#12a454",
 };
 
-const PRIORITY_BG: Record<Priority, string> = {
+const PRIORITY_BG: Record<PriorityKey, string> = {
+  "Індивід": "#fde8ea",
   "Критично": "#fde8ea",
   "Терміново": "#fef9e7",
   "Дефіцит": "#f3eefa",
   "Низький": "#e6f7ed",
+};
+
+const effectivePriority = (o: Order): PriorityKey =>
+  o.individual ? "Індивід" : o.priority;
+
+const formatShortDate = (s?: string): string => {
+  if (!s) return "";
+  const iso = s.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (iso) return `${iso[3]}.${iso[2]}`;
+  const dm = s.match(/^(\d{2})\.(\d{2})/);
+  return dm ? `${dm[1]}.${dm[2]}` : s;
 };
 
 const STATUS_LABEL: Record<string, string> = {
@@ -50,8 +65,14 @@ const STATUS_ICON: Record<string, string> = {
 
 const PRODUCT_COLORS = ["#1f7aec", "#e63946", "#f7c948", "#12a454", "#8b5cf6", "#f97316", "#ec4899", "#06b6d4"];
 
-function higherPriority(a: Priority, b: Priority): Priority {
+function higherPriority(a: PriorityKey, b: PriorityKey): PriorityKey {
   return PRIORITY_RANK[a] <= PRIORITY_RANK[b] ? a : b;
+}
+
+function earliestDate(a?: string, b?: string): string | undefined {
+  if (!a) return b;
+  if (!b) return a;
+  return new Date(a).getTime() <= new Date(b).getTime() ? a : b;
 }
 
 interface StatusBreakdown {
@@ -62,8 +83,9 @@ interface StatusBreakdown {
 
 interface SizeCell {
   total: number;
-  priority: Priority;
+  priority: PriorityKey;
   byStatus: StatusBreakdown;
+  earliestDue?: string;
 }
 
 interface MatrixRow {
@@ -87,15 +109,22 @@ function useAnalyticsData(orders: Order[]) {
         row = { label, sizes: {}, totalQty: 0 };
         groupMap.set(key, row);
       }
+      const oPrio = effectivePriority(o);
       const existing = row.sizes[col];
       if (existing) {
         existing.total += o.quantity;
-        existing.priority = higherPriority(existing.priority, o.priority);
+        existing.priority = higherPriority(existing.priority, oPrio);
         existing.byStatus[o.status as keyof StatusBreakdown] += o.quantity;
+        if (o.individual) existing.earliestDue = earliestDate(existing.earliestDue, o.launchDate);
       } else {
         const byStatus: StatusBreakdown = { incoming: 0, cutting: 0, "in-progress": 0 };
         byStatus[o.status as keyof StatusBreakdown] = o.quantity;
-        row.sizes[col] = { total: o.quantity, priority: o.priority, byStatus };
+        row.sizes[col] = {
+          total: o.quantity,
+          priority: oPrio,
+          byStatus,
+          earliestDue: o.individual ? o.launchDate : undefined,
+        };
       }
     }
 
@@ -116,13 +145,18 @@ function useAnalyticsData(orders: Order[]) {
       .sort((a, b) => b.qty - a.qty);
 
     // --- Pie chart: qty by priority ---
-    const prioMap = new Map<Priority, number>();
+    const prioMap = new Map<PriorityKey, number>();
     for (const o of active) {
-      prioMap.set(o.priority, (prioMap.get(o.priority) || 0) + o.quantity);
+      const k = effectivePriority(o);
+      prioMap.set(k, (prioMap.get(k) || 0) + o.quantity);
     }
-    const pieData = (["Критично", "Терміново", "Дефіцит", "Низький"] as Priority[])
+    const pieData = (["Індивід", "Критично", "Терміново", "Дефіцит", "Низький"] as PriorityKey[])
       .filter((p) => prioMap.has(p))
-      .map((p) => ({ name: p, value: prioMap.get(p)!, color: PRIORITY_COLOR[p] }));
+      .map((p) => ({
+        name: p === "Індивід" ? "Індивідуально" : p,
+        value: prioMap.get(p)!,
+        color: PRIORITY_COLOR[p],
+      }));
 
     // --- Summary numbers ---
     const totalUnits = active.reduce((s, o) => s + o.quantity, 0);
@@ -149,7 +183,11 @@ const MatrixCell = ({ cell }: { cell: SizeCell | undefined }) => {
       onMouseEnter={() => setHover(true)}
       onMouseLeave={() => setHover(false)}
     >
-      <span className="matrix-priority-label">{cell.priority}</span>
+      <span className="matrix-priority-label">
+        {cell.priority === "Індивід"
+          ? (cell.earliestDue ? `до ${formatShortDate(cell.earliestDue)}` : "Індивід.")
+          : cell.priority}
+      </span>
       <span className="matrix-total">{cell.total}</span>
       {statuses.length === 1 && statuses[0] === "incoming" ? null : (
         <span className="matrix-breakdown">
@@ -169,7 +207,9 @@ const MatrixCell = ({ cell }: { cell: SizeCell | undefined }) => {
       {hover && (
         <div className="matrix-tooltip">
           <div className="matrix-tooltip-priority" style={{ color: PRIORITY_COLOR[cell.priority] }}>
-            {cell.priority}
+            {cell.priority === "Індивід"
+              ? (cell.earliestDue ? `Індивід. — до ${formatShortDate(cell.earliestDue)}` : "Індивід.")
+              : cell.priority}
           </div>
           {statuses.map((s) => (
             <div key={s}>{STATUS_LABEL[s]}: {cell.byStatus[s]} шт.</div>

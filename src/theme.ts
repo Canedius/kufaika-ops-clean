@@ -8,7 +8,7 @@ export const priorityTone: Record<Priority, string> = {
 };
 
 export const statusLabel: Record<OrderStatus, string> = {
-  incoming: "Замовлення на пошив",
+  incoming: "Складський пошив",
   cutting: "В розкрої",
   "in-progress": "Взято в роботу",
   done: "Виготовлено",

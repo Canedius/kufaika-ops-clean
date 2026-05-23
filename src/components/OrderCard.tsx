@@ -38,9 +38,18 @@ export const OrderCard = ({
   pulse,
 }: Props) => {
   const tone = priorityTone[order.priority];
-  const status = statusLabel[order.status];
-  const statusColor = statusTone[order.status];
+  const isIndividual = !!order.individual && order.status === "incoming";
+  const status = isIndividual ? "Індивідуальний пошив" : statusLabel[order.status];
+  const statusColor = isIndividual ? "tone-red-text" : statusTone[order.status];
   const photo = getPhotoUrl(order.sku);
+
+  const dueShort = (() => {
+    if (!isIndividual || !order.launchDate) return null;
+    const m = order.launchDate.match(/^(\d{4})-(\d{2})-(\d{2})/);
+    if (m) return `${m[3]}.${m[2]}`;
+    const dm = order.launchDate.match(/^(\d{2})\.(\d{2})/);
+    return dm ? `${dm[1]}.${dm[2]}` : null;
+  })();
 
   const badge = (() => {
     const today = new Date().toISOString().slice(0, 10);
@@ -85,7 +94,9 @@ export const OrderCard = ({
             <div className="mini-title">{order.productType}</div>
           </div>
         </div>
-        <div className={`pill ${tone}`}>{order.priority}</div>
+        <div className={`pill ${isIndividual ? "tone-red" : tone}`}>
+          {isIndividual ? (dueShort ? `до ${dueShort}` : "Індив.") : order.priority}
+        </div>
       </div>
 
       <div className="mini-row">
@@ -102,8 +113,8 @@ export const OrderCard = ({
       </div>
 
       <div className="summary-line">
-        <span className={statusColor}>{status}</span>
-        {order.priority === "Дефіцит" && <AlertTriangle size={16} className="alert-icon" />}
+        <span className={statusColor} style={isIndividual ? { fontWeight: 600 } : undefined}>{status}</span>
+        {(order.priority === "Дефіцит" || isIndividual) && <AlertTriangle size={16} className="alert-icon" />}
         <div className="card-actions">
           {onCut && order.status === "incoming" && (
             <button className="btn mini primary" onClick={(e) => { stop(e); onCut(order); }}>

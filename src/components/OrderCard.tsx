@@ -38,7 +38,7 @@ export const OrderCard = ({
   pulse,
 }: Props) => {
   const tone = priorityTone[order.priority];
-  const isIndividual = !!order.individual && order.status === "incoming";
+  const isIndividual = !!order.individual;
   const status = isIndividual ? "Індивідуальний пошив" : statusLabel[order.status];
   const statusColor = isIndividual ? "tone-red-text" : statusTone[order.status];
   const photo = getPhotoUrl(order.sku);

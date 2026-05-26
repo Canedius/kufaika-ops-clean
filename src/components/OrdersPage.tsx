@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { FilterBar } from "./FilterBar";
 import { OrderCard } from "./OrderCard";
-import { fetchOrders, fetchCutStock, updateOrder, consumeFromStock, addToStock, createCuttingOrder, createIncomingOrder, archiveOrder, formatDate, PRODUCT_CATALOG, COLOR_CATALOG } from "../lib/api";
+import { fetchOrders, fetchCutStock, updateOrder, consumeFromStock, addToStock, createCuttingOrder, createIncomingOrder, archiveOrder, formatDate, PRODUCT_CATALOG, COLOR_CATALOG, FABRIC_OPTIONS, fabricFromSku } from "../lib/api";
 import type { Order, OrderStatus, Priority, CutStockItem, SortLevel } from "../types";
 import { priorityTone, statusLabel, statusTone } from "../theme";
 import { getPhotoUrl } from "../lib/photos";
@@ -26,6 +26,7 @@ type NewOrderForm = {
   sku: string; // manual override; empty = auto-generated
   comment: string;
   dueDate: string; // YYYY-MM-DD — на яке число пошити
+  fabric: string;
 };
 
 const todayIso = () => {
@@ -42,6 +43,7 @@ const emptyNewOrderForm = (): NewOrderForm => ({
   sku: "",
   comment: "",
   dueDate: todayIso(),
+  fabric: "",
 });
 
 type Props = {
@@ -342,6 +344,7 @@ export const OrdersPage = ({ filterBy, emptyText, actions }: Props) => {
       launchDate: f.dueDate,
       comment: f.comment.trim() || undefined,
       individual: true,
+      fabric: f.fabric || undefined,
     }).then(() => setTimeout(() => qc.invalidateQueries({ queryKey: ["orders"] }), 3000));
   };
 
@@ -663,7 +666,14 @@ export const OrdersPage = ({ filterBy, emptyText, actions }: Props) => {
                 <select
                   autoFocus
                   value={newOrderForm.productCode}
-                  onChange={(e) => setNewOrderForm((f) => ({ ...f, productCode: e.target.value, colorCode: "", size: "", sku: "" }))}
+                  onChange={(e) => setNewOrderForm((f) => ({
+                    ...f,
+                    productCode: e.target.value,
+                    colorCode: "",
+                    size: "",
+                    sku: "",
+                    fabric: fabricFromSku(`${e.target.value}XX`) || "",
+                  }))}
                 >
                   <option value="">— оберіть товар —</option>
                   {PRODUCT_CATALOG.map((p) => (
@@ -742,6 +752,20 @@ export const OrdersPage = ({ filterBy, emptyText, actions }: Props) => {
                     onChange={(e) => setNewOrderForm((f) => ({ ...f, dueDate: e.target.value }))}
                   />
                 </div>
+              </div>
+
+              <div className="modal-field">
+                <label>Тканина</label>
+                <select
+                  value={newOrderForm.fabric}
+                  disabled={!selectedProduct}
+                  onChange={(e) => setNewOrderForm((f) => ({ ...f, fabric: e.target.value }))}
+                >
+                  <option value="">— оберіть тканину —</option>
+                  {FABRIC_OPTIONS.map((fab) => (
+                    <option key={fab} value={fab}>{fab}</option>
+                  ))}
+                </select>
               </div>
 
               <div className="modal-field">

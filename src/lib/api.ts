@@ -106,14 +106,20 @@ export function productTypeFromSku(sku: string): string {
   return map[prefix] || "";
 }
 
+export const FABRIC_OPTIONS = [
+  "трьохнитка 320 г/м²",
+  "стрейч кулір 200 г/м²",
+  "двонитка 240 г/м²",
+] as const;
+
 export function fabricFromSku(sku: string): string {
   const prefix = sku.slice(0, 6).toUpperCase();
   const heavyLoop = ["KUF001", "KUF004"];
   const lightLoop = ["KUF006", "KUF007", "KUF008", "KUF009"];
   const doubleLoop = ["KUF002", "KUF005"];
-  if (heavyLoop.includes(prefix)) return "трьохнитка 320 г/м²";
-  if (lightLoop.includes(prefix)) return "стрейч кулір 200 г/м²";
-  if (doubleLoop.includes(prefix)) return "двонитка 240 г/м²";
+  if (heavyLoop.includes(prefix)) return FABRIC_OPTIONS[0];
+  if (lightLoop.includes(prefix)) return FABRIC_OPTIONS[1];
+  if (doubleLoop.includes(prefix)) return FABRIC_OPTIONS[2];
   return "";
 }
 
@@ -315,6 +321,7 @@ export async function createIncomingOrder(fields: {
   color?: string;
   launchDate?: string;
   individual?: boolean;
+  fabric?: string;
 }): Promise<void> {
   if (!WEBHOOK_STATUS) {
     console.info(`[mock] createIncomingOrder`, fields);
@@ -332,7 +339,7 @@ export async function createIncomingOrder(fields: {
         size: fields.size,
         launchDate: formatDate(launchIso),
         priority: fields.priority,
-        fabric: fabricFromSku(sku),
+        fabric: fields.fabric || fabricFromSku(sku),
         comment,
         individual: !!fields.individual,
         targetQty: fields.targetQty,

@@ -2,11 +2,12 @@ import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { FilterBar } from "./FilterBar";
 import { OrderCard } from "./OrderCard";
-import { fetchOrders, fetchCutStock, updateOrder, consumeFromStock, addToStock, createCuttingOrder, createIncomingOrder, archiveOrder, formatDate, PRODUCT_CATALOG, COLOR_CATALOG, FABRIC_OPTIONS, fabricFromSku } from "../lib/api";
+import { fetchOrders, fetchCutStock, updateOrder, consumeFromStock, addToStock, createCuttingOrder, createIncomingOrder, archiveOrder, formatDate, PRODUCT_CATALOG, COLOR_CATALOG, FABRIC_OPTIONS, fabricFromSku, newGroupId } from "../lib/api";
+import { IndividualGroupCard } from "./IndividualGroupCard";
 import type { Order, OrderStatus, Priority, CutStockItem, SortLevel } from "../types";
 import { priorityTone, statusLabel, statusTone } from "../theme";
 import { getPhotoUrl } from "../lib/photos";
-import { Info, Shirt, Palette, Ruler, Package, BarChart3, Target, RotateCcw, Scissors, Layers } from "lucide-react";
+import { Info, Shirt, Palette, Ruler, Package, BarChart3, Target, RotateCcw, Scissors, Layers, Copy } from "lucide-react";
 
 type ShelfModal = {
   order: Order;
@@ -17,16 +18,20 @@ type CutModal = { order: Order; qty: number };
 type SewModal = { order: Order; qty: number };
 type CutToSewModal = { order: Order; qty: number };
 
-type NewOrderForm = {
+type PositionForm = {
   productCode: string;
   colorCode: string;
   customColorName: string;
   size: string;
   qty: number;
   sku: string; // manual override; empty = auto-generated
+  fabric: string;
+};
+
+type NewOrderForm = {
+  positions: PositionForm[]; // одна задача може містити кілька позицій
   comment: string;
   dueDate: string; // YYYY-MM-DD — на яке число пошити
-  fabric: string;
 };
 
 const todayIso = () => {
@@ -34,16 +39,20 @@ const todayIso = () => {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 };
 
-const emptyNewOrderForm = (): NewOrderForm => ({
+const emptyPosition = (): PositionForm => ({
   productCode: "",
   colorCode: "",
   customColorName: "",
   size: "",
   qty: 1,
   sku: "",
+  fabric: "",
+});
+
+const emptyNewOrderForm = (): NewOrderForm => ({
+  positions: [emptyPosition()],
   comment: "",
   dueDate: todayIso(),
-  fabric: "",
 });
 
 type Props = {
@@ -140,6 +149,30 @@ export const OrdersPage = ({ filterBy, emptyText, actions }: Props) => {
   const selected =
     filtered.find((o) => o.id === selectedId) ||
     (filtered.length ? filtered[0] : null);
+
+  // Об'єднуємо позиції однієї індивідуальної задачі (спільний groupId) в один блок,
+  // зберігаючи порядок появи першої позиції у відсортованому списку.
+  type RenderUnit =
+    | { type: "single"; order: Order }
+    | { type: "group"; id: string; members: Order[] };
+  const renderUnits = useMemo(() => {
+    const units: RenderUnit[] = [];
+    const idxByGroup = new Map<string, number>();
+    for (const o of filtered) {
+      if (o.individual && o.groupId) {
+        const at = idxByGroup.get(o.groupId);
+        if (at === undefined) {
+          idxByGroup.set(o.groupId, units.length);
+          units.push({ type: "group", id: o.groupId, members: [o] });
+        } else {
+          (units[at] as Extract<RenderUnit, { type: "group" }>).members.push(o);
+        }
+      } else {
+        units.push({ type: "single", order: o });
+      }
+    }
+    return units;
+  }, [filtered]);
 
   const toggleBulk = (order: Order, checked: boolean) => {
     setBulkSelected((prev) => {
@@ -322,31 +355,134 @@ export const OrdersPage = ({ filterBy, emptyText, actions }: Props) => {
     }
   };
 
+  // --- Редагування позицій у формі нової задачі ---
+  const updatePosition = (i: number, patch: Partial<PositionForm>) =>
+    setNewOrderForm((f) => ({
+      ...f,
+      positions: f.positions.map((p, j) => (j === i ? { ...p, ...patch } : p)),
+    }));
+  const addPosition = () =>
+    setNewOrderForm((f) => ({ ...f, positions: [...f.positions, emptyPosition()] }));
+  const duplicatePosition = (i: number) =>
+    setNewOrderForm((f) => {
+      const positions = [...f.positions];
+      positions.splice(i + 1, 0, { ...f.positions[i] });
+      return { ...f, positions };
+    });
+  const removePosition = (i: number) =>
+    setNewOrderForm((f) => ({
+      ...f,
+      positions: f.positions.length > 1 ? f.positions.filter((_, j) => j !== i) : f.positions,
+    }));
+
+  const positionValid = (p: PositionForm) => {
+    const product = PRODUCT_CATALOG.find((pr) => pr.code === p.productCode);
+    const hasColor = !!p.customColorName.trim() || !!p.colorCode;
+    return !!product && hasColor && !!p.size && p.qty >= 1;
+  };
+
   const handleNewOrderConfirm = () => {
     const f = newOrderForm;
-    const product = PRODUCT_CATALOG.find((p) => p.code === f.productCode);
-    const customName = f.customColorName.trim();
-    const effectiveColorCode = customName ? "XX" : f.colorCode;
-    if (!product || (!customName && !f.colorCode) || !f.size || f.qty < 1) return;
-    const catalogName = COLOR_CATALOG.find((c) => c.code === f.colorCode)?.name;
-    const effectiveColorName = customName || catalogName || effectiveColorCode;
-    const autoSku = `${f.productCode}${effectiveColorCode}${f.size}`;
-    const effectiveSku = f.sku.trim() || autoSku;
+    const built = f.positions.map((p) => {
+      const product = PRODUCT_CATALOG.find((pr) => pr.code === p.productCode);
+      const customName = p.customColorName.trim();
+      const effectiveColorCode = customName ? "XX" : p.colorCode;
+      if (!product || (!customName && !p.colorCode) || !p.size || p.qty < 1) return null;
+      const catalogName = COLOR_CATALOG.find((c) => c.code === p.colorCode)?.name;
+      const effectiveColorName = customName || catalogName || effectiveColorCode;
+      const autoSku = `${p.productCode}${effectiveColorCode}${p.size}`;
+      return {
+        productType: product.name,
+        size: p.size,
+        qty: p.qty,
+        sku: p.sku.trim() || autoSku,
+        color: effectiveColorName,
+        fabric: p.fabric || undefined,
+      };
+    });
+    if (built.length === 0 || built.some((b) => b === null)) return;
+    const positions = built as NonNullable<(typeof built)[number]>[];
+    // Кілька позицій → спільний id групи (одна картка). Одна позиція → як раніше.
+    const groupId = positions.length > 1 ? newGroupId() : undefined;
+    const comment = f.comment.trim() || undefined;
     setNewOrderOpen(false);
     setNewOrderForm(emptyNewOrderForm());
-    createIncomingOrder({
-      productType: product.name,
-      size: f.size,
-      qty: f.qty,
-      priority: "Низький",
-      sku: effectiveSku,
-      color: effectiveColorName,
-      launchDate: f.dueDate,
-      comment: f.comment.trim() || undefined,
-      individual: true,
-      fabric: f.fabric || undefined,
-    }).then(() => setTimeout(() => qc.invalidateQueries({ queryKey: ["orders"] }), 3000));
+    Promise.all(
+      positions.map((pos) =>
+        createIncomingOrder({
+          productType: pos.productType,
+          size: pos.size,
+          qty: pos.qty,
+          priority: "Низький",
+          sku: pos.sku,
+          color: pos.color,
+          launchDate: f.dueDate,
+          comment,
+          individual: true,
+          fabric: pos.fabric,
+          groupId,
+        }),
+      ),
+    ).then(() => setTimeout(() => qc.invalidateQueries({ queryKey: ["orders"] }), 3000));
   };
+
+  // --- Групові дії (індивідуальна задача з кількох позицій) ---
+  // Позиції рухаються разом, у повному обсязі (без часткового розщеплення),
+  // тож група завжди в одному статусі і лишається однією карткою.
+  const invalidateOrdersSoon = () =>
+    setTimeout(() => {
+      qc.invalidateQueries({ queryKey: ["cutStock"] });
+      qc.invalidateQueries({ queryKey: ["orders"] });
+    }, 3000);
+
+  const groupCut = (members: Order[]) => {
+    members.forEach((order) => {
+      optimisticUpdate(order.id, { status: "cutting", cutting_qty: order.quantity });
+      if (order.dtId) updateOrder(order.dtId, order, { status: "cutting", cutting_qty: order.quantity });
+      else createCuttingOrder(order, order.quantity, "", "cutting");
+    });
+    invalidateOrdersSoon();
+  };
+
+  const groupSew = (members: Order[]) => {
+    members.forEach((order) => {
+      const available = cutStock.filter((s) => s.sku === order.sku && s.size === order.size);
+      let remaining = order.quantity;
+      for (const item of available) {
+        if (remaining <= 0) break;
+        const take = Math.min(remaining, item.qty);
+        consumeFromStock(item.stockId, take, item.dtId, item.qty);
+        remaining -= take;
+      }
+      optimisticUpdate(order.id, { status: "in-progress" });
+      if (order.dtId) updateOrder(order.dtId, order, { status: "in-progress" });
+    });
+    setPulseId(members[0]?.id ?? null);
+    setTimeout(() => setPulseId(null), 800);
+    invalidateOrdersSoon();
+  };
+
+  const groupCutToSew = (members: Order[]) => {
+    members.forEach((order) => {
+      optimisticUpdate(order.id, { status: "in-progress" });
+      if (order.dtId) updateOrder(order.dtId, order, { status: "in-progress" });
+    });
+    invalidateOrdersSoon();
+  };
+
+  const groupShelf = (members: Order[]) => {
+    members.forEach((order) => {
+      const qty = order.cutting_qty || order.quantity;
+      addToStock({ sku: order.sku, size: order.size, qty, shelf: "", cutDate: new Date().toISOString().split("T")[0] });
+      pendingArchiveIds.current.add(order.id);
+      optimisticUpdate(order.id, { status: "archived" });
+      archiveOrder(order);
+    });
+    invalidateOrdersSoon();
+  };
+
+  const groupBack = (members: Order[]) => members.forEach((order) => handleUpdate(order, "incoming"));
+  const groupDone = (members: Order[]) => members.forEach((order) => handleComplete(order));
 
   return (
     <div className="page-stack">
@@ -395,25 +531,49 @@ export const OrdersPage = ({ filterBy, emptyText, actions }: Props) => {
             </div>
           )}
 
-          {filtered.map((order) => (
-            <OrderCard
-              key={`${order.id}-${order.sku}`}
-              order={order}
-              selected={order.id === selected?.id}
-              pulse={order.id === pulseId}
-              onSelect={(o) => setSelectedId(o.id)}
-              selectable
-              checked={bulkSelected.has(order.id)}
-              onToggleSelect={toggleBulk}
-              onCut={actions.cut ? handleCut : undefined}
-              onSew={actions.sew ? handleSew : undefined}
-              hasStock={stockMap.get(`${order.sku}|${order.size}`) ? (stockMap.get(`${order.sku}|${order.size}`)! > 0) : false}
-              onShelf={actions.shelf ? openShelfModal : undefined}
-              onCutToSew={actions.cutToSew ? handleCutToSew : undefined}
-              onBack={actions.backToIncoming ? (o) => handleUpdate(o, "incoming") : undefined}
-              onDone={actions.complete ? handleComplete : undefined}
-            />
-          ))}
+          {renderUnits.map((unit) => {
+            if (unit.type === "group" && unit.members.length > 1) {
+              const groupHasStock = unit.members.every(
+                (m) => (stockMap.get(`${m.sku}|${m.size}`) ?? 0) >= m.quantity,
+              );
+              return (
+                <IndividualGroupCard
+                  key={`g-${unit.id}`}
+                  members={unit.members}
+                  selectedId={selected?.id}
+                  hasStock={groupHasStock}
+                  pulse={unit.members.some((m) => m.id === pulseId)}
+                  onSelectMember={(o) => setSelectedId(o.id)}
+                  onCut={actions.cut ? groupCut : undefined}
+                  onSew={actions.sew ? groupSew : undefined}
+                  onShelf={actions.shelf ? groupShelf : undefined}
+                  onCutToSew={actions.cutToSew ? groupCutToSew : undefined}
+                  onBack={actions.backToIncoming ? groupBack : undefined}
+                  onDone={actions.complete ? groupDone : undefined}
+                />
+              );
+            }
+            const order = unit.type === "group" ? unit.members[0] : unit.order;
+            return (
+              <OrderCard
+                key={`${order.id}-${order.sku}`}
+                order={order}
+                selected={order.id === selected?.id}
+                pulse={order.id === pulseId}
+                onSelect={(o) => setSelectedId(o.id)}
+                selectable
+                checked={bulkSelected.has(order.id)}
+                onToggleSelect={toggleBulk}
+                onCut={actions.cut ? handleCut : undefined}
+                onSew={actions.sew ? handleSew : undefined}
+                hasStock={stockMap.get(`${order.sku}|${order.size}`) ? (stockMap.get(`${order.sku}|${order.size}`)! > 0) : false}
+                onShelf={actions.shelf ? openShelfModal : undefined}
+                onCutToSew={actions.cutToSew ? handleCutToSew : undefined}
+                onBack={actions.backToIncoming ? (o) => handleUpdate(o, "incoming") : undefined}
+                onDone={actions.complete ? handleComplete : undefined}
+              />
+            );
+          })}
         </div>
 
         <div className="detail-pane">
@@ -648,124 +808,156 @@ export const OrdersPage = ({ filterBy, emptyText, actions }: Props) => {
         );
       })()}
       {newOrderOpen && (() => {
-        const selectedProduct = PRODUCT_CATALOG.find((p) => p.code === newOrderForm.productCode);
-        const availableColors = selectedProduct
-          ? COLOR_CATALOG.filter((c) => selectedProduct.colors.includes(c.code))
-          : COLOR_CATALOG;
-        const availableSizes = selectedProduct?.sizes ?? [];
-        const customName = newOrderForm.customColorName.trim();
-        const hasColor = !!customName || !!newOrderForm.colorCode;
-        const canSubmit = !!selectedProduct && hasColor && !!newOrderForm.size && newOrderForm.qty >= 1;
+        const multi = newOrderForm.positions.length > 1;
+        const canSubmit = newOrderForm.positions.length > 0 && newOrderForm.positions.every(positionValid);
         return (
           <div className="modal-overlay" onClick={() => setNewOrderOpen(false)}>
             <div className="modal modal--new-order" onClick={(e) => e.stopPropagation()}>
-              <div className="modal-title">Нова задача</div>
+              <div className="modal-title">Нова задача{multi ? ` · ${newOrderForm.positions.length} позицій` : ""}</div>
 
-              <div className="modal-field">
-                <label>Товар *</label>
-                <select
-                  autoFocus
-                  value={newOrderForm.productCode}
-                  onChange={(e) => setNewOrderForm((f) => ({
-                    ...f,
-                    productCode: e.target.value,
-                    colorCode: "",
-                    size: "",
-                    sku: "",
-                    fabric: fabricFromSku(`${e.target.value}XX`) || "",
-                  }))}
-                >
-                  <option value="">— оберіть товар —</option>
-                  {PRODUCT_CATALOG.map((p) => (
-                    <option key={p.code} value={p.code}>{p.name} ({p.code})</option>
-                  ))}
-                </select>
-              </div>
+              {newOrderForm.positions.map((pos, i) => {
+                const selectedProduct = PRODUCT_CATALOG.find((p) => p.code === pos.productCode);
+                const availableColors = selectedProduct
+                  ? COLOR_CATALOG.filter((c) => selectedProduct.colors.includes(c.code))
+                  : COLOR_CATALOG;
+                const availableSizes = selectedProduct?.sizes ?? [];
+                const customName = pos.customColorName.trim();
+                return (
+                  <div className="modal-position" key={i}>
+                    <div className="modal-position-head">
+                      <span className="modal-position-num">{multi ? `Позиція ${i + 1}` : "Позиція"}</span>
+                      <div className="modal-position-actions">
+                        <button
+                          type="button"
+                          className="btn mini ghost"
+                          onClick={() => duplicatePosition(i)}
+                          title="Додати таку саму позицію"
+                        >
+                          <Copy size={13} /> Копіювати
+                        </button>
+                        {multi && (
+                          <button
+                            type="button"
+                            className="btn mini ghost"
+                            onClick={() => removePosition(i)}
+                          >
+                            Видалити
+                          </button>
+                        )}
+                      </div>
+                    </div>
 
-              <div className="modal-row-2">
-                <div className="modal-field">
-                  <label>
-                    Колір *
-                    {!customName && newOrderForm.colorCode && (
-                      <span className="modal-selected-label">
-                        {availableColors.find(c => c.code === newOrderForm.colorCode)?.name}
-                      </span>
-                    )}
-                    {customName && (
-                      <span className="modal-selected-label">
-                        {customName} (свій)
-                      </span>
-                    )}
-                  </label>
-                  <div className={`color-swatches${!selectedProduct ? " color-swatches--disabled" : ""}`}>
-                    {availableColors.map((c) => (
-                      <button
-                        key={c.code}
-                        type="button"
-                        className={`color-swatch${!customName && newOrderForm.colorCode === c.code ? " color-swatch--active" : ""}`}
-                        style={{ background: c.hex }}
-                        title={c.name}
-                        disabled={!selectedProduct}
-                        onClick={() => setNewOrderForm((f) => ({ ...f, colorCode: c.code, customColorName: "", sku: "" }))}
-                      />
-                    ))}
+                    <div className="modal-field">
+                      <label>Товар *</label>
+                      <select
+                        autoFocus={i === 0}
+                        value={pos.productCode}
+                        onChange={(e) => updatePosition(i, {
+                          productCode: e.target.value,
+                          colorCode: "",
+                          size: "",
+                          sku: "",
+                          fabric: fabricFromSku(`${e.target.value}XX`) || "",
+                        })}
+                      >
+                        <option value="">— оберіть товар —</option>
+                        {PRODUCT_CATALOG.map((p) => (
+                          <option key={p.code} value={p.code}>{p.name} ({p.code})</option>
+                        ))}
+                      </select>
+                    </div>
+
+                    <div className="modal-row-2">
+                      <div className="modal-field">
+                        <label>
+                          Колір *
+                          {!customName && pos.colorCode && (
+                            <span className="modal-selected-label">
+                              {availableColors.find(c => c.code === pos.colorCode)?.name}
+                            </span>
+                          )}
+                          {customName && (
+                            <span className="modal-selected-label">
+                              {customName} (свій)
+                            </span>
+                          )}
+                        </label>
+                        <div className={`color-swatches${!selectedProduct ? " color-swatches--disabled" : ""}`}>
+                          {availableColors.map((c) => (
+                            <button
+                              key={c.code}
+                              type="button"
+                              className={`color-swatch${!customName && pos.colorCode === c.code ? " color-swatch--active" : ""}`}
+                              style={{ background: c.hex }}
+                              title={c.name}
+                              disabled={!selectedProduct}
+                              onClick={() => updatePosition(i, { colorCode: c.code, customColorName: "", sku: "" })}
+                            />
+                          ))}
+                        </div>
+                        <input
+                          className="custom-color-input"
+                          type="text"
+                          placeholder="Або введіть свій колір…"
+                          value={pos.customColorName}
+                          disabled={!selectedProduct}
+                          onChange={(e) => updatePosition(i, { customColorName: e.target.value, sku: "" })}
+                        />
+                      </div>
+                      <div className="modal-field">
+                        <label>Розмір *</label>
+                        <select
+                          value={pos.size}
+                          disabled={!selectedProduct}
+                          onChange={(e) => updatePosition(i, { size: e.target.value, sku: "" })}
+                        >
+                          <option value="">— розмір —</option>
+                          {availableSizes.map((s) => (
+                            <option key={s} value={s}>{s}</option>
+                          ))}
+                        </select>
+                      </div>
+                    </div>
+
+                    <div className="modal-row-2">
+                      <div className="modal-field">
+                        <label>Кількість (шт) *</label>
+                        <input
+                          type="number"
+                          min={1}
+                          value={pos.qty}
+                          onChange={(e) => updatePosition(i, { qty: Math.max(1, Number(e.target.value)) })}
+                        />
+                      </div>
+                      <div className="modal-field">
+                        <label>Тканина</label>
+                        <select
+                          value={pos.fabric}
+                          disabled={!selectedProduct}
+                          onChange={(e) => updatePosition(i, { fabric: e.target.value })}
+                        >
+                          <option value="">— оберіть тканину —</option>
+                          {FABRIC_OPTIONS.map((fab) => (
+                            <option key={fab} value={fab}>{fab}</option>
+                          ))}
+                        </select>
+                      </div>
+                    </div>
                   </div>
-                  <input
-                    className="custom-color-input"
-                    type="text"
-                    placeholder="Або введіть свій колір…"
-                    value={newOrderForm.customColorName}
-                    disabled={!selectedProduct}
-                    onChange={(e) => setNewOrderForm((f) => ({ ...f, customColorName: e.target.value, sku: "" }))}
-                  />
-                </div>
-                <div className="modal-field">
-                  <label>Розмір *</label>
-                  <select
-                    value={newOrderForm.size}
-                    disabled={!selectedProduct}
-                    onChange={(e) => setNewOrderForm((f) => ({ ...f, size: e.target.value, sku: "" }))}
-                  >
-                    <option value="">— розмір —</option>
-                    {availableSizes.map((s) => (
-                      <option key={s} value={s}>{s}</option>
-                    ))}
-                  </select>
-                </div>
-              </div>
+                );
+              })}
 
-              <div className="modal-row-2">
-                <div className="modal-field">
-                  <label>Кількість (шт) *</label>
-                  <input
-                    type="number"
-                    min={1}
-                    value={newOrderForm.qty}
-                    onChange={(e) => setNewOrderForm((f) => ({ ...f, qty: Math.max(1, Number(e.target.value)) }))}
-                  />
-                </div>
-                <div className="modal-field">
-                  <label>На яке число пошити *</label>
-                  <input
-                    type="date"
-                    value={newOrderForm.dueDate}
-                    onChange={(e) => setNewOrderForm((f) => ({ ...f, dueDate: e.target.value }))}
-                  />
-                </div>
-              </div>
+              <button type="button" className="btn ghost modal-add-position" onClick={addPosition}>
+                + Додати позицію
+              </button>
 
               <div className="modal-field">
-                <label>Тканина</label>
-                <select
-                  value={newOrderForm.fabric}
-                  disabled={!selectedProduct}
-                  onChange={(e) => setNewOrderForm((f) => ({ ...f, fabric: e.target.value }))}
-                >
-                  <option value="">— оберіть тканину —</option>
-                  {FABRIC_OPTIONS.map((fab) => (
-                    <option key={fab} value={fab}>{fab}</option>
-                  ))}
-                </select>
+                <label>На яке число пошити *</label>
+                <input
+                  type="date"
+                  value={newOrderForm.dueDate}
+                  onChange={(e) => setNewOrderForm((f) => ({ ...f, dueDate: e.target.value }))}
+                />
               </div>
 
               <div className="modal-field">
@@ -781,7 +973,7 @@ export const OrdersPage = ({ filterBy, emptyText, actions }: Props) => {
               <div className="modal-actions">
                 <button className="btn ghost" onClick={() => setNewOrderOpen(false)}>Скасувати</button>
                 <button className="btn primary" disabled={!canSubmit} onClick={handleNewOrderConfirm}>
-                  Створити
+                  {multi ? `Створити (${newOrderForm.positions.length})` : "Створити"}
                 </button>
               </div>
             </div>

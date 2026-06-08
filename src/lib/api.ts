@@ -110,6 +110,7 @@ export const FABRIC_OPTIONS = [
   "трьохнитка 320 г/м²",
   "стрейч кулір 200 г/м²",
   "двонитка 240 г/м²",
+  "3-нитка петля (без начосу)",
 ] as const;
 
 export function fabricFromSku(sku: string): string {
@@ -161,7 +162,8 @@ async function fetchRange(range: string, forcedStatus?: OrderStatus): Promise<Or
     const priority = (get("priority") || "Низький") as Priority;
     const rawComment = get("comment") || "";
     const individual = rawComment.startsWith(INDIVIDUAL_MARK);
-    const comment = individual ? rawComment.slice(INDIVIDUAL_MARK.length).trim() : rawComment;
+    const afterMark = individual ? rawComment.slice(INDIVIDUAL_MARK.length).trim() : rawComment;
+    const { groupId, comment } = parseGroup(afterMark);
 
     orders.push({
       id,
@@ -176,6 +178,7 @@ async function fetchRange(range: string, forcedStatus?: OrderStatus): Promise<Or
       launchDate: get("launch_date") || "",
       comment,
       individual,
+      groupId,
       currentAvailable: parseNumber(get("current_available")),
       targetQty: parseNumber(get("target_qty")),
       fabric: get("fabric") || fabricFromSku(sku),
@@ -200,13 +203,16 @@ export async function fetchOrders(): Promise<Order[]> {
       .map((o) => {
         const rawComment = o.comment || "";
         const markedInd = rawComment.startsWith(INDIVIDUAL_MARK);
+        const afterMark = markedInd ? rawComment.slice(INDIVIDUAL_MARK.length).trim() : rawComment;
+        const { groupId, comment } = parseGroup(afterMark);
         return {
           ...o,
           size: o.size || o.sku.match(/^KUF\d{3}[A-Z]{2}(.*)/i)?.[1] || "",
           color: (o.color || colorNameFromSku(o.sku)).replace("Графітовий", "Сірий"),
           productType: o.productType || productTypeFromSku(o.sku),
-          comment: markedInd ? rawComment.slice(INDIVIDUAL_MARK.length).trim() : rawComment,
+          comment,
           individual: o.individual || markedInd,
+          groupId: o.groupId || groupId,
         };
       });
   } catch (err) {
@@ -309,6 +315,23 @@ export async function createCuttingOrder(
 
 export const INDIVIDUAL_MARK = "[ІНД]";
 
+// Токен групи у коментарі: [G:<id>] одразу після мітки [ІНД].
+// Дозволяє об'єднати кілька позицій однієї індивідуальної задачі в одну картку,
+// зберігаючи кожну позицію окремим рядком (для матриці/аналітики/складу).
+const GROUP_RE = /^\s*\[G:([A-Za-z0-9_-]+)\]\s*/;
+
+/** Витягує id групи з коментаря (після зняття мітки [ІНД]) і повертає очищений коментар. */
+export function parseGroup(comment: string): { groupId?: string; comment: string } {
+  const m = comment.match(GROUP_RE);
+  if (!m) return { comment };
+  return { groupId: m[1], comment: comment.slice(m[0].length) };
+}
+
+/** Генерує короткий id групи. */
+export function newGroupId(): string {
+  return Math.random().toString(36).slice(2, 8) + Date.now().toString(36).slice(-4);
+}
+
 export async function createIncomingOrder(fields: {
   productType: string;
   size: string;
@@ -322,6 +345,7 @@ export async function createIncomingOrder(fields: {
   launchDate?: string;
   individual?: boolean;
   fabric?: string;
+  groupId?: string;
 }): Promise<void> {
   if (!WEBHOOK_STATUS) {
     console.info(`[mock] createIncomingOrder`, fields);
@@ -330,7 +354,8 @@ export async function createIncomingOrder(fields: {
   const sku = fields.sku || "";
   const launchIso = fields.launchDate || new Date().toISOString();
   const baseComment = fields.comment || "";
-  const comment = fields.individual ? `${INDIVIDUAL_MARK} ${baseComment}`.trim() : baseComment;
+  const withGroup = fields.groupId ? `[G:${fields.groupId}] ${baseComment}`.trim() : baseComment;
+  const comment = fields.individual ? `${INDIVIDUAL_MARK} ${withGroup}`.trim() : withGroup;
   await ky.post(WEBHOOK_STATUS, {
     json: {
       action: "create",

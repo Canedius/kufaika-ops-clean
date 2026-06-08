@@ -38,4 +38,6 @@ export interface Order {
   updatedAt?: string;
   createdAt?: string;
   individual?: boolean;
+  /** Групує кілька позицій однієї індивідуальної задачі в одну картку. */
+  groupId?: string;
 }

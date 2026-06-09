@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { FilterBar } from "./FilterBar";
 import { OrderCard } from "./OrderCard";
-import { fetchOrders, fetchCutStock, updateOrder, consumeFromStock, addToStock, createCuttingOrder, createIncomingOrder, archiveOrder, formatDate, PRODUCT_CATALOG, COLOR_CATALOG, FABRIC_OPTIONS, fabricFromSku, newGroupId } from "../lib/api";
+import { fetchOrders, fetchCutStock, updateOrder, editOrder, consumeFromStock, addToStock, createCuttingOrder, createIncomingOrder, archiveOrder, formatDate, PRODUCT_CATALOG, COLOR_CATALOG, FABRIC_OPTIONS, fabricFromSku, newGroupId } from "../lib/api";
 import { IndividualGroupCard } from "./IndividualGroupCard";
 import type { Order, OrderStatus, Priority, CutStockItem, SortLevel } from "../types";
 import { priorityTone, statusLabel, statusTone } from "../theme";
@@ -26,6 +26,7 @@ type PositionForm = {
   qty: number;
   sku: string; // manual override; empty = auto-generated
   fabric: string;
+  dtId?: number; // присутній → редагуємо існуючий рядок; відсутній → створюємо новий
 };
 
 type NewOrderForm = {
@@ -109,6 +110,8 @@ export const OrdersPage = ({ filterBy, emptyText, actions }: Props) => {
   const [cutToSewModal, setCutToSewModal] = useState<CutToSewModal | null>(null);
   const [newOrderOpen, setNewOrderOpen] = useState(false);
   const [newOrderForm, setNewOrderForm] = useState<NewOrderForm>(emptyNewOrderForm);
+  // Режим редагування: null = створення нової задачі; інакше — редагуємо ці рядки.
+  const [editGroup, setEditGroup] = useState<{ groupId?: string; members: Order[] } | null>(null);
 
   useEffect(() => {
     setBulkSelected(new Set());
@@ -366,7 +369,8 @@ export const OrdersPage = ({ filterBy, emptyText, actions }: Props) => {
   const duplicatePosition = (i: number) =>
     setNewOrderForm((f) => {
       const positions = [...f.positions];
-      positions.splice(i + 1, 0, { ...f.positions[i] });
+      // Копія — завжди НОВА позиція (без dtId), навіть у режимі редагування.
+      positions.splice(i + 1, 0, { ...f.positions[i], dtId: undefined });
       return { ...f, positions };
     });
   const removePosition = (i: number) =>
@@ -381,25 +385,29 @@ export const OrdersPage = ({ filterBy, emptyText, actions }: Props) => {
     return !!product && hasColor && !!p.size && p.qty >= 1;
   };
 
+  // Перетворює позицію форми на дані замовлення (sku/колір/тканина тощо) або null, якщо неповна.
+  const buildPosition = (p: PositionForm) => {
+    const product = PRODUCT_CATALOG.find((pr) => pr.code === p.productCode);
+    const customName = p.customColorName.trim();
+    const effectiveColorCode = customName ? "XX" : p.colorCode;
+    if (!product || (!customName && !p.colorCode) || !p.size || p.qty < 1) return null;
+    const catalogName = COLOR_CATALOG.find((c) => c.code === p.colorCode)?.name;
+    const effectiveColorName = customName || catalogName || effectiveColorCode;
+    const autoSku = `${p.productCode}${effectiveColorCode}${p.size}`;
+    return {
+      productType: product.name,
+      size: p.size,
+      qty: p.qty,
+      sku: p.sku.trim() || autoSku,
+      color: effectiveColorName,
+      fabric: p.fabric || "",
+      dtId: p.dtId,
+    };
+  };
+
   const handleNewOrderConfirm = () => {
     const f = newOrderForm;
-    const built = f.positions.map((p) => {
-      const product = PRODUCT_CATALOG.find((pr) => pr.code === p.productCode);
-      const customName = p.customColorName.trim();
-      const effectiveColorCode = customName ? "XX" : p.colorCode;
-      if (!product || (!customName && !p.colorCode) || !p.size || p.qty < 1) return null;
-      const catalogName = COLOR_CATALOG.find((c) => c.code === p.colorCode)?.name;
-      const effectiveColorName = customName || catalogName || effectiveColorCode;
-      const autoSku = `${p.productCode}${effectiveColorCode}${p.size}`;
-      return {
-        productType: product.name,
-        size: p.size,
-        qty: p.qty,
-        sku: p.sku.trim() || autoSku,
-        color: effectiveColorName,
-        fabric: p.fabric || undefined,
-      };
-    });
+    const built = f.positions.map(buildPosition);
     if (built.length === 0 || built.some((b) => b === null)) return;
     const positions = built as NonNullable<(typeof built)[number]>[];
     // Кілька позицій → спільний id групи (одна картка). Одна позиція → як раніше.
@@ -419,11 +427,104 @@ export const OrdersPage = ({ filterBy, emptyText, actions }: Props) => {
           launchDate: f.dueDate,
           comment,
           individual: true,
-          fabric: pos.fabric,
+          fabric: pos.fabric || undefined,
           groupId,
         }),
       ),
     ).then(() => setTimeout(() => qc.invalidateQueries({ queryKey: ["orders"] }), 3000));
+  };
+
+  // --- Редагування індивідуальної задачі ---
+  const toIsoDate = (s?: string) => {
+    if (!s) return "";
+    const dm = s.match(/^(\d{2})\.(\d{2})\.(\d{4})/);
+    if (dm) return `${dm[3]}-${dm[2]}-${dm[1]}`;
+    const iso = s.match(/^(\d{4})-(\d{2})-(\d{2})/);
+    return iso ? iso[0] : "";
+  };
+
+  const orderToPosition = (o: Order): PositionForm => {
+    const product = PRODUCT_CATALOG.find((p) => p.name === o.productType);
+    const colorMatch = COLOR_CATALOG.find((c) => c.name === o.color);
+    return {
+      productCode: product?.code || "",
+      colorCode: colorMatch?.code || "",
+      customColorName: colorMatch ? "" : (o.color || ""),
+      size: o.size,
+      qty: o.quantity,
+      sku: "", // перерахуємо при збереженні
+      fabric: o.fabric || "",
+      dtId: o.dtId,
+    };
+  };
+
+  const openEditGroup = (members: Order[]) => {
+    if (members.length === 0) return;
+    const positions = members.map(orderToPosition);
+    const earliestIso = members.map((m) => toIsoDate(m.launchDate)).filter(Boolean).sort()[0];
+    const comment = members.find((m) => m.comment)?.comment || "";
+    setEditGroup({ groupId: members[0].groupId, members });
+    setNewOrderForm({
+      positions: positions.length ? positions : [emptyPosition()],
+      comment,
+      dueDate: earliestIso || todayIso(),
+    });
+    setNewOrderOpen(true);
+  };
+
+  const closeModal = () => {
+    setNewOrderOpen(false);
+    setEditGroup(null);
+    setNewOrderForm(emptyNewOrderForm());
+  };
+
+  const handleEditConfirm = () => {
+    if (!editGroup) return;
+    const f = newOrderForm;
+    const built = f.positions.map(buildPosition);
+    if (built.length === 0 || built.some((b) => b === null)) return;
+    const positions = built as NonNullable<(typeof built)[number]>[];
+    const members = editGroup.members;
+    const comment = f.comment.trim();
+    // Якщо стало кілька позицій, а групи ще не було — створюємо id групи.
+    const effectiveGroupId = editGroup.groupId || (positions.length > 1 ? newGroupId() : undefined);
+    const keptDtIds = new Set(positions.map((p) => p.dtId).filter((x): x is number => x != null));
+    const removed = members.filter((m) => m.dtId != null && !keptDtIds.has(m.dtId));
+
+    closeModal();
+
+    const ops: Promise<void>[] = [];
+    for (const d of positions) {
+      if (d.dtId != null) {
+        const origin = members.find((m) => m.dtId === d.dtId);
+        if (!origin) continue;
+        optimisticUpdate(origin.id, {
+          sku: d.sku, size: d.size, color: d.color, fabric: d.fabric,
+          productType: d.productType, quantity: d.qty, comment, launchDate: f.dueDate,
+          groupId: effectiveGroupId,
+        });
+        ops.push(editOrder(
+          { ...origin, groupId: effectiveGroupId },
+          {
+            sku: d.sku, size: d.size, color: d.color, fabric: d.fabric,
+            productType: d.productType, priority: origin.priority,
+            launchDate: f.dueDate, qty: d.qty, comment,
+          },
+        ));
+      } else {
+        ops.push(createIncomingOrder({
+          productType: d.productType, size: d.size, qty: d.qty, priority: "Низький",
+          sku: d.sku, color: d.color, launchDate: f.dueDate, comment: comment || undefined,
+          individual: true, fabric: d.fabric || undefined, groupId: effectiveGroupId,
+        }));
+      }
+    }
+    for (const m of removed) {
+      pendingArchiveIds.current.add(m.id);
+      optimisticUpdate(m.id, { status: "archived" });
+      ops.push(archiveOrder(m));
+    }
+    Promise.all(ops).then(() => setTimeout(() => qc.invalidateQueries({ queryKey: ["orders"] }), 3000));
   };
 
   // --- Групові дії (індивідуальна задача з кількох позицій) ---
@@ -500,7 +601,10 @@ export const OrdersPage = ({ filterBy, emptyText, actions }: Props) => {
       <div className="board">
         <div className="cards-list">
           {filterBy.includes("incoming") && (
-            <button className="btn add-sew-btn" onClick={() => setNewOrderOpen(true)}>
+            <button
+              className="btn add-sew-btn"
+              onClick={() => { setEditGroup(null); setNewOrderForm(emptyNewOrderForm()); setNewOrderOpen(true); }}
+            >
               + Додати пошив
             </button>
           )}
@@ -544,6 +648,7 @@ export const OrdersPage = ({ filterBy, emptyText, actions }: Props) => {
                   hasStock={groupHasStock}
                   pulse={unit.members.some((m) => m.id === pulseId)}
                   onSelectMember={(o) => setSelectedId(o.id)}
+                  onEdit={unit.members[0].status === "incoming" ? openEditGroup : undefined}
                   onCut={actions.cut ? groupCut : undefined}
                   onSew={actions.sew ? groupSew : undefined}
                   onShelf={actions.shelf ? groupShelf : undefined}
@@ -571,6 +676,7 @@ export const OrdersPage = ({ filterBy, emptyText, actions }: Props) => {
                 onCutToSew={actions.cutToSew ? handleCutToSew : undefined}
                 onBack={actions.backToIncoming ? (o) => handleUpdate(o, "incoming") : undefined}
                 onDone={actions.complete ? handleComplete : undefined}
+                onEdit={order.individual && order.status === "incoming" ? (o) => openEditGroup([o]) : undefined}
               />
             );
           })}
@@ -809,11 +915,14 @@ export const OrdersPage = ({ filterBy, emptyText, actions }: Props) => {
       })()}
       {newOrderOpen && (() => {
         const multi = newOrderForm.positions.length > 1;
+        const isEdit = !!editGroup;
         const canSubmit = newOrderForm.positions.length > 0 && newOrderForm.positions.every(positionValid);
         return (
-          <div className="modal-overlay" onClick={() => setNewOrderOpen(false)}>
+          <div className="modal-overlay" onClick={closeModal}>
             <div className="modal modal--new-order" onClick={(e) => e.stopPropagation()}>
-              <div className="modal-title">Нова задача{multi ? ` · ${newOrderForm.positions.length} позицій` : ""}</div>
+              <div className="modal-title">
+                {isEdit ? "Редагувати задачу" : "Нова задача"}{multi ? ` · ${newOrderForm.positions.length} позицій` : ""}
+              </div>
 
               {newOrderForm.positions.map((pos, i) => {
                 const selectedProduct = PRODUCT_CATALOG.find((p) => p.code === pos.productCode);
@@ -971,9 +1080,13 @@ export const OrdersPage = ({ filterBy, emptyText, actions }: Props) => {
               </div>
 
               <div className="modal-actions">
-                <button className="btn ghost" onClick={() => setNewOrderOpen(false)}>Скасувати</button>
-                <button className="btn primary" disabled={!canSubmit} onClick={handleNewOrderConfirm}>
-                  {multi ? `Створити (${newOrderForm.positions.length})` : "Створити"}
+                <button className="btn ghost" onClick={closeModal}>Скасувати</button>
+                <button
+                  className="btn primary"
+                  disabled={!canSubmit}
+                  onClick={isEdit ? handleEditConfirm : handleNewOrderConfirm}
+                >
+                  {isEdit ? "Зберегти" : multi ? `Створити (${newOrderForm.positions.length})` : "Створити"}
                 </button>
               </div>
             </div>

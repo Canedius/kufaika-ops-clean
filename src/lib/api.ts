@@ -332,6 +332,13 @@ export function newGroupId(): string {
   return Math.random().toString(36).slice(2, 8) + Date.now().toString(36).slice(-4);
 }
 
+/** Збирає коментар для зберігання: [ІНД] [G:id] <чистий коментар>. */
+export function encodeComment(opts: { individual?: boolean; groupId?: string; comment?: string }): string {
+  const base = opts.comment || "";
+  const withGroup = opts.groupId ? `[G:${opts.groupId}] ${base}`.trim() : base;
+  return opts.individual ? `${INDIVIDUAL_MARK} ${withGroup}`.trim() : withGroup;
+}
+
 export async function createIncomingOrder(fields: {
   productType: string;
   size: string;
@@ -353,9 +360,7 @@ export async function createIncomingOrder(fields: {
   }
   const sku = fields.sku || "";
   const launchIso = fields.launchDate || new Date().toISOString();
-  const baseComment = fields.comment || "";
-  const withGroup = fields.groupId ? `[G:${fields.groupId}] ${baseComment}`.trim() : baseComment;
-  const comment = fields.individual ? `${INDIVIDUAL_MARK} ${withGroup}`.trim() : withGroup;
+  const comment = encodeComment({ individual: fields.individual, groupId: fields.groupId, comment: fields.comment });
   await ky.post(WEBHOOK_STATUS, {
     json: {
       action: "create",
@@ -429,6 +434,53 @@ export async function updateOrder(
       cutting_qty: fields.cutting_qty ?? (currentOrder.cutting_qty || 0),
       boxes_to_sew: fields.boxes_to_sew ?? currentOrder.boxes,
       shelf: fields.shelf ?? (currentOrder.shelf || ""),
+    },
+    timeout: 10000,
+  });
+}
+
+/**
+ * Повне редагування існуючого рядка (через гілку action="edit" у n8n).
+ * Оновлює описові поля (sku/size/color/fabric/коментар/дата/тип/пріоритет)
+ * та кількість, зберігаючи статус/розкрій/ящики/полицю. Коментар перекодовується
+ * з мітками [ІНД]/[G:], щоб не втратити ознаку індивідуального та групу.
+ */
+export async function editOrder(
+  order: Pick<Order, "dtId" | "status" | "cutting_qty" | "boxes" | "shelf" | "individual" | "groupId">,
+  fields: {
+    sku: string;
+    size: string;
+    color: string;
+    fabric: string;
+    productType: string;
+    priority: Priority;
+    launchDate: string; // YYYY-MM-DD або ISO
+    qty: number;
+    comment: string; // чистий коментар, без міток
+  },
+): Promise<void> {
+  const updateUrl = WEBHOOK_STATUS_UPDATE || WEBHOOK_STATUS;
+  if (!updateUrl) {
+    console.info(`[mock] editOrder dtId=${order.dtId}`, fields);
+    return;
+  }
+  await ky.post(updateUrl, {
+    json: {
+      action: "edit",
+      dtId: order.dtId,
+      status: order.status,
+      to_sew: fields.qty,
+      cutting_qty: order.cutting_qty || 0,
+      boxes_to_sew: order.boxes || 0,
+      shelf: order.shelf || "",
+      sku: fields.sku,
+      size: fields.size,
+      color: fields.color,
+      fabric: fields.fabric,
+      product_type: fields.productType,
+      priority: fields.priority,
+      launch_date: formatDate(fields.launchDate),
+      comment: encodeComment({ individual: order.individual, groupId: order.groupId, comment: fields.comment }),
     },
     timeout: 10000,
   });

@@ -89,7 +89,10 @@ interface SizeCell {
 }
 
 interface MatrixRow {
+  id: string;
   label: string;
+  fabric: string;
+  individual: boolean;
   sizes: Record<string, SizeCell>;
   totalQty: number;
 }
@@ -101,12 +104,15 @@ function useAnalyticsData(orders: Order[]) {
     // --- Matrix data ---
     const groupMap = new Map<string, MatrixRow>();
     for (const o of active) {
-      const key = `${o.productType}::${o.color}`;
+      // Тканина і ознака «індивідуальне» — частина ключа, щоб різні матеріали
+      // та індивідуальні замовлення не сумувались зі складськими.
+      const fabric = o.fabric || "";
+      const key = `${o.productType}::${o.color}::${fabric}::${o.individual ? "ind" : "stock"}`;
       const col = SIZE_NORMALIZE[o.size] || SIZE_NORMALIZE[o.size?.toUpperCase()] || o.size;
       let row = groupMap.get(key);
       if (!row) {
         const label = `${o.productType} — ${o.color}`.replace(/[⬛⬜🩷🩶🟩🟫]/g, "").trim();
-        row = { label, sizes: {}, totalQty: 0 };
+        row = { id: key, label, fabric, individual: !!o.individual, sizes: {}, totalQty: 0 };
         groupMap.set(key, row);
       }
       const oPrio = effectivePriority(o);
@@ -317,8 +323,15 @@ export const AnalyticsPage = () => {
             </thead>
             <tbody>
               {sortedMatrixRows.map((row) => (
-                <tr key={row.label}>
-                  <td className="matrix-label">{row.label}</td>
+                <tr key={row.id}>
+                  <td className="matrix-label">
+                    <span className="matrix-label-name">{row.label}</span>
+                    {row.fabric && (
+                      <span className="matrix-label-fabric">
+                        {row.individual ? "🧵 інд. · " : ""}{row.fabric}
+                      </span>
+                    )}
+                  </td>
                   <td className="matrix-total-col">{row.totalQty}</td>
                   {SIZE_COLUMNS.map((s) => (
                     <MatrixCell key={s} cell={row.sizes[s]} />

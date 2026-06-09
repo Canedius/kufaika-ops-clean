@@ -54,7 +54,9 @@ function higherPriority(a: Priority, b: Priority): Priority {
 }
 
 function groupKey(order: Order): string {
-  return `${order.productType}::${order.color}`;
+  // Тканина і ознака «індивідуальне» — частина ключа, щоб різні матеріали
+  // та індивідуальні замовлення не сумувались зі складськими.
+  return `${order.productType}::${order.color}::${order.fabric || ""}::${order.individual ? "ind" : "stock"}`;
 }
 
 export function aggregateOrders(orders: Order[]): CrossTableRow[] {
@@ -100,7 +102,9 @@ export function aggregateOrders(orders: Order[]): CrossTableRow[] {
   }
 
   rows.sort((a, b) =>
-    a.productName.localeCompare(b.productName) || a.color.localeCompare(b.color),
+    a.productName.localeCompare(b.productName) ||
+    a.color.localeCompare(b.color) ||
+    a.fabric.localeCompare(b.fabric),
   );
 
   return rows;

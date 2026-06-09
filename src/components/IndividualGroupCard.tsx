@@ -1,5 +1,5 @@
 import type { Order } from "../types";
-import { AlertTriangle } from "lucide-react";
+import { AlertTriangle, Pencil } from "lucide-react";
 import { getPhotoUrl } from "../lib/photos";
 import type { MouseEvent } from "react";
 
@@ -8,6 +8,7 @@ type Props = {
   selectedId?: string | null;
   hasStock?: boolean;
   onSelectMember?: (order: Order) => void;
+  onEdit?: (members: Order[]) => void;
   onCut?: (members: Order[]) => void;
   onSew?: (members: Order[]) => void;
   onShelf?: (members: Order[]) => void;
@@ -30,6 +31,7 @@ export const IndividualGroupCard = ({
   selectedId,
   hasStock,
   onSelectMember,
+  onEdit,
   onCut,
   onSew,
   onShelf,
@@ -62,7 +64,19 @@ export const IndividualGroupCard = ({
             <div className="mini-title">{members.length} позицій · {totalQty} шт</div>
           </div>
         </div>
-        <div className="pill tone-red">{dueShort ? `до ${dueShort}` : "Індив."}</div>
+        <div className="card-head-right">
+          {onEdit && (
+            <button
+              type="button"
+              className="btn mini ghost icon-only"
+              title="Редагувати задачу"
+              onClick={(e) => { stop(e); onEdit(members); }}
+            >
+              <Pencil size={14} />
+            </button>
+          )}
+          <div className="pill tone-red">{dueShort ? `до ${dueShort}` : "Індив."}</div>
+        </div>
       </div>
 
       <div className="group-positions">

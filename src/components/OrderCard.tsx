@@ -1,6 +1,6 @@
 import type { Order } from "../types";
 import { priorityTone, statusLabel, statusTone } from "../theme";
-import { AlertTriangle } from "lucide-react";
+import { AlertTriangle, Pencil } from "lucide-react";
 import { getPhotoUrl } from "../lib/photos";
 import type { MouseEvent } from "react";
 
@@ -18,6 +18,7 @@ type Props = {
   onCutToSew?: (order: Order) => void;
   onBack?: (order: Order) => void;
   onDone?: (order: Order) => void;
+  onEdit?: (order: Order) => void;
   pulse?: boolean;
 };
 
@@ -35,6 +36,7 @@ export const OrderCard = ({
   onCutToSew,
   onBack,
   onDone,
+  onEdit,
   pulse,
 }: Props) => {
   const tone = priorityTone[order.priority];
@@ -116,6 +118,15 @@ export const OrderCard = ({
         <span className={statusColor} style={isIndividual ? { fontWeight: 600 } : undefined}>{status}</span>
         {(order.priority === "Дефіцит" || isIndividual) && <AlertTriangle size={16} className="alert-icon" />}
         <div className="card-actions">
+          {onEdit && (
+            <button
+              className="btn mini ghost icon-only"
+              title="Редагувати задачу"
+              onClick={(e) => { stop(e); onEdit(order); }}
+            >
+              <Pencil size={14} />
+            </button>
+          )}
           {onCut && order.status === "incoming" && (
             <button className="btn mini primary" onClick={(e) => { stop(e); onCut(order); }}>
               В розкрій

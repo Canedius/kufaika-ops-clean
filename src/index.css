@@ -577,6 +577,16 @@ a {
   margin-left: auto;
 }
 
+.card-head-right {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.btn.mini.icon-only {
+  padding: 4px 6px;
+  line-height: 0;
+}
+
 .sku {
   font-weight: 700;
   letter-spacing: 0.5px;
@@ -1263,6 +1273,16 @@ a {
   font-weight: 500;
   white-space: nowrap;
   border-bottom: 1px solid var(--border);
+}
+.matrix-label-name {
+  display: block;
+}
+.matrix-label-fabric {
+  display: block;
+  font-weight: 400;
+  font-size: 11px;
+  color: var(--muted);
+  margin-top: 2px;
 }
 
 .matrix-total-col {

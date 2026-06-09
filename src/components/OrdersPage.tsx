@@ -2,8 +2,7 @@ import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { FilterBar } from "./FilterBar";
 import { OrderCard } from "./OrderCard";
-import { fetchOrders, fetchCutStock, updateOrder, editOrder, consumeFromStock, addToStock, createCuttingOrder, createIncomingOrder, archiveOrder, formatDate, PRODUCT_CATALOG, COLOR_CATALOG, FABRIC_OPTIONS, fabricFromSku, newGroupId } from "../lib/api";
-import { IndividualGroupCard } from "./IndividualGroupCard";
+import { fetchOrders, fetchCutStock, updateOrder, editOrder, consumeFromStock, addToStock, createCuttingOrder, createIncomingOrder, archiveOrder, formatDate, PRODUCT_CATALOG, COLOR_CATALOG, FABRIC_OPTIONS, fabricFromSku } from "../lib/api";
 import type { Order, OrderStatus, Priority, CutStockItem, SortLevel } from "../types";
 import { priorityTone, statusLabel, statusTone } from "../theme";
 import { getPhotoUrl } from "../lib/photos";
@@ -152,30 +151,6 @@ export const OrdersPage = ({ filterBy, emptyText, actions }: Props) => {
   const selected =
     filtered.find((o) => o.id === selectedId) ||
     (filtered.length ? filtered[0] : null);
-
-  // Об'єднуємо позиції однієї індивідуальної задачі (спільний groupId) в один блок,
-  // зберігаючи порядок появи першої позиції у відсортованому списку.
-  type RenderUnit =
-    | { type: "single"; order: Order }
-    | { type: "group"; id: string; members: Order[] };
-  const renderUnits = useMemo(() => {
-    const units: RenderUnit[] = [];
-    const idxByGroup = new Map<string, number>();
-    for (const o of filtered) {
-      if (o.individual && o.groupId) {
-        const at = idxByGroup.get(o.groupId);
-        if (at === undefined) {
-          idxByGroup.set(o.groupId, units.length);
-          units.push({ type: "group", id: o.groupId, members: [o] });
-        } else {
-          (units[at] as Extract<RenderUnit, { type: "group" }>).members.push(o);
-        }
-      } else {
-        units.push({ type: "single", order: o });
-      }
-    }
-    return units;
-  }, [filtered]);
 
   const toggleBulk = (order: Order, checked: boolean) => {
     setBulkSelected((prev) => {
@@ -410,8 +385,7 @@ export const OrdersPage = ({ filterBy, emptyText, actions }: Props) => {
     const built = f.positions.map(buildPosition);
     if (built.length === 0 || built.some((b) => b === null)) return;
     const positions = built as NonNullable<(typeof built)[number]>[];
-    // Кілька позицій → спільний id групи (одна картка). Одна позиція → як раніше.
-    const groupId = positions.length > 1 ? newGroupId() : undefined;
+    // Кожна позиція створюється як ОКРЕМА індивідуальна задача (окрема картка).
     const comment = f.comment.trim() || undefined;
     setNewOrderOpen(false);
     setNewOrderForm(emptyNewOrderForm());
@@ -428,7 +402,6 @@ export const OrdersPage = ({ filterBy, emptyText, actions }: Props) => {
           comment,
           individual: true,
           fabric: pos.fabric || undefined,
-          groupId,
         }),
       ),
     ).then(() => setTimeout(() => qc.invalidateQueries({ queryKey: ["orders"] }), 3000));
@@ -486,8 +459,6 @@ export const OrdersPage = ({ filterBy, emptyText, actions }: Props) => {
     const positions = built as NonNullable<(typeof built)[number]>[];
     const members = editGroup.members;
     const comment = f.comment.trim();
-    // Якщо стало кілька позицій, а групи ще не було — створюємо id групи.
-    const effectiveGroupId = editGroup.groupId || (positions.length > 1 ? newGroupId() : undefined);
     const keptDtIds = new Set(positions.map((p) => p.dtId).filter((x): x is number => x != null));
     const removed = members.filter((m) => m.dtId != null && !keptDtIds.has(m.dtId));
 
@@ -501,21 +472,18 @@ export const OrdersPage = ({ filterBy, emptyText, actions }: Props) => {
         optimisticUpdate(origin.id, {
           sku: d.sku, size: d.size, color: d.color, fabric: d.fabric,
           productType: d.productType, quantity: d.qty, comment, launchDate: f.dueDate,
-          groupId: effectiveGroupId,
         });
-        ops.push(editOrder(
-          { ...origin, groupId: effectiveGroupId },
-          {
-            sku: d.sku, size: d.size, color: d.color, fabric: d.fabric,
-            productType: d.productType, priority: origin.priority,
-            launchDate: f.dueDate, qty: d.qty, comment,
-          },
-        ));
+        ops.push(editOrder(origin, {
+          sku: d.sku, size: d.size, color: d.color, fabric: d.fabric,
+          productType: d.productType, priority: origin.priority,
+          launchDate: f.dueDate, qty: d.qty, comment,
+        }));
       } else {
+        // Кожна нова позиція — окрема індивідуальна задача (без обʼєднання в групу).
         ops.push(createIncomingOrder({
           productType: d.productType, size: d.size, qty: d.qty, priority: "Низький",
           sku: d.sku, color: d.color, launchDate: f.dueDate, comment: comment || undefined,
-          individual: true, fabric: d.fabric || undefined, groupId: effectiveGroupId,
+          individual: true, fabric: d.fabric || undefined,
         }));
       }
     }
@@ -526,64 +494,6 @@ export const OrdersPage = ({ filterBy, emptyText, actions }: Props) => {
     }
     Promise.all(ops).then(() => setTimeout(() => qc.invalidateQueries({ queryKey: ["orders"] }), 3000));
   };
-
-  // --- Групові дії (індивідуальна задача з кількох позицій) ---
-  // Позиції рухаються разом, у повному обсязі (без часткового розщеплення),
-  // тож група завжди в одному статусі і лишається однією карткою.
-  const invalidateOrdersSoon = () =>
-    setTimeout(() => {
-      qc.invalidateQueries({ queryKey: ["cutStock"] });
-      qc.invalidateQueries({ queryKey: ["orders"] });
-    }, 3000);
-
-  const groupCut = (members: Order[]) => {
-    members.forEach((order) => {
-      optimisticUpdate(order.id, { status: "cutting", cutting_qty: order.quantity });
-      if (order.dtId) updateOrder(order.dtId, order, { status: "cutting", cutting_qty: order.quantity });
-      else createCuttingOrder(order, order.quantity, "", "cutting");
-    });
-    invalidateOrdersSoon();
-  };
-
-  const groupSew = (members: Order[]) => {
-    members.forEach((order) => {
-      const available = cutStock.filter((s) => s.sku === order.sku && s.size === order.size);
-      let remaining = order.quantity;
-      for (const item of available) {
-        if (remaining <= 0) break;
-        const take = Math.min(remaining, item.qty);
-        consumeFromStock(item.stockId, take, item.dtId, item.qty);
-        remaining -= take;
-      }
-      optimisticUpdate(order.id, { status: "in-progress" });
-      if (order.dtId) updateOrder(order.dtId, order, { status: "in-progress" });
-    });
-    setPulseId(members[0]?.id ?? null);
-    setTimeout(() => setPulseId(null), 800);
-    invalidateOrdersSoon();
-  };
-
-  const groupCutToSew = (members: Order[]) => {
-    members.forEach((order) => {
-      optimisticUpdate(order.id, { status: "in-progress" });
-      if (order.dtId) updateOrder(order.dtId, order, { status: "in-progress" });
-    });
-    invalidateOrdersSoon();
-  };
-
-  const groupShelf = (members: Order[]) => {
-    members.forEach((order) => {
-      const qty = order.cutting_qty || order.quantity;
-      addToStock({ sku: order.sku, size: order.size, qty, shelf: "", cutDate: new Date().toISOString().split("T")[0] });
-      pendingArchiveIds.current.add(order.id);
-      optimisticUpdate(order.id, { status: "archived" });
-      archiveOrder(order);
-    });
-    invalidateOrdersSoon();
-  };
-
-  const groupBack = (members: Order[]) => members.forEach((order) => handleUpdate(order, "incoming"));
-  const groupDone = (members: Order[]) => members.forEach((order) => handleComplete(order));
 
   return (
     <div className="page-stack">
@@ -635,30 +545,7 @@ export const OrdersPage = ({ filterBy, emptyText, actions }: Props) => {
             </div>
           )}
 
-          {renderUnits.map((unit) => {
-            if (unit.type === "group" && unit.members.length > 1) {
-              const groupHasStock = unit.members.every(
-                (m) => (stockMap.get(`${m.sku}|${m.size}`) ?? 0) >= m.quantity,
-              );
-              return (
-                <IndividualGroupCard
-                  key={`g-${unit.id}`}
-                  members={unit.members}
-                  selectedId={selected?.id}
-                  hasStock={groupHasStock}
-                  pulse={unit.members.some((m) => m.id === pulseId)}
-                  onSelectMember={(o) => setSelectedId(o.id)}
-                  onEdit={unit.members[0].status === "incoming" ? openEditGroup : undefined}
-                  onCut={actions.cut ? groupCut : undefined}
-                  onSew={actions.sew ? groupSew : undefined}
-                  onShelf={actions.shelf ? groupShelf : undefined}
-                  onCutToSew={actions.cutToSew ? groupCutToSew : undefined}
-                  onBack={actions.backToIncoming ? groupBack : undefined}
-                  onDone={actions.complete ? groupDone : undefined}
-                />
-              );
-            }
-            const order = unit.type === "group" ? unit.members[0] : unit.order;
+          {filtered.map((order) => {
             return (
               <OrderCard
                 key={`${order.id}-${order.sku}`}

@@ -25,7 +25,7 @@ const PRIORITY_RANK: Record<PriorityKey, number> = {
 };
 
 const PRIORITY_COLOR: Record<PriorityKey, string> = {
-  "Індивід": "#c92b36",
+  "Індивід": "#64748b",
   "Критично": "#e63946",
   "Терміново": "#f7c948",
   "Дефіцит": "#8b5cf6",
@@ -33,7 +33,7 @@ const PRIORITY_COLOR: Record<PriorityKey, string> = {
 };
 
 const PRIORITY_BG: Record<PriorityKey, string> = {
-  "Індивід": "#fde8ea",
+  "Індивід": "#eef1f5",
   "Критично": "#fde8ea",
   "Терміново": "#fef9e7",
   "Дефіцит": "#f3eefa",

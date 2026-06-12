@@ -282,9 +282,10 @@ export async function createCuttingOrder(
   qty: number,
   shelf: string,
   status: OrderStatus = "cutting",
+  individual = false,
 ): Promise<void> {
   if (!WEBHOOK_STATUS) {
-    console.info(`[mock] createCuttingOrder sku=${order.sku} qty=${qty} shelf=${shelf} status=${status}`);
+    console.info(`[mock] createCuttingOrder sku=${order.sku} qty=${qty} shelf=${shelf} status=${status} individual=${individual}`);
     return;
   }
   const boxes_to_sew = order.quantity > 0 ? Math.round((qty / order.quantity) * order.boxes) : 0;
@@ -297,7 +298,8 @@ export async function createCuttingOrder(
         launchDate: formatDate(new Date().toISOString()),
         priority: order.priority,
         fabric: order.fabric,
-        comment: order.comment,
+        // Зберігаємо мітку [ІНД], щоб похідне замовлення лишалось індивідуальним.
+        comment: encodeComment({ individual, comment: order.comment }),
         targetQty: order.targetQty,
         boxes_to_sew,
         current_available: order.currentAvailable ?? "",

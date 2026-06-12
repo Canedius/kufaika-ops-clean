@@ -12,7 +12,9 @@ export interface CutStockItem {
   qty: number;
   shelf: string;
   cutDate: string;
-  status: "available" | "used";
+  status: "available" | "used" | "individual";
+  /** Крій під індивідуальну задачу — не змішується зі складським кроєм. */
+  individual?: boolean;
 }
 
 export type OrderStatus = "incoming" | "cutting" | "in-progress" | "done" | "archived";

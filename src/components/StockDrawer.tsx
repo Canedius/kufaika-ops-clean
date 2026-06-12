@@ -79,7 +79,7 @@ export const StockDrawer = ({ open, onClose }: Props) => {
     setSewPending(true);
 
     Promise.all([
-      createCuttingOrder(orderData, qty, "", "in-progress"),
+      createCuttingOrder(orderData, qty, "", "in-progress", item.individual),
       consumeFromStock(item.stockId, qty, item.dtId, item.qty),
     ]).then(() => {
       setTimeout(async () => {
@@ -149,8 +149,11 @@ export const StockDrawer = ({ open, onClose }: Props) => {
                   const isEditing = editingDtId !== null && editingDtId === item.dtId;
                   const isSaving = updateMutation.isPending && isEditing;
                   return (
-                    <tr key={item.dtId ?? `${item.sku}-${item.size}-${item.shelf}`} className={isEditing ? "stock-row--editing" : ""}>
-                      <td className="stock-product">{productTypeFromSku(item.sku) || "—"}</td>
+                    <tr key={item.dtId ?? `${item.sku}-${item.size}-${item.shelf}`} className={`${isEditing ? "stock-row--editing" : ""} ${item.individual ? "stock-row--individual" : ""}`}>
+                      <td className="stock-product">
+                        {item.individual && <span className="stock-ind-badge" title="Індивідуальний крій — окремо від складського">🧵 інд.</span>}
+                        {productTypeFromSku(item.sku) || "—"}
+                      </td>
                       <td className="stock-color">{colorNameFromSku(item.sku) || "—"}</td>
                       <td className="stock-sku">{item.sku}</td>
                       <td>{item.size}</td>

@@ -117,15 +117,22 @@ export const OrdersPage = ({ filterBy, emptyText, actions }: Props) => {
     setSelectedId(null);
   }, [filterBy.join(",")]);
 
-  // Map SKU|size → total available qty on shelf
-  const stockMap = useMemo(() => {
-    const map = new Map<string, number>();
+  // Map SKU|size → доступний крій. Окремі пули: складський та індивідуальний,
+  // щоб індивідуальний крій не списувався під звичайні замовлення (і навпаки).
+  const stockMaps = useMemo(() => {
+    const reg = new Map<string, number>();
+    const ind = new Map<string, number>();
     for (const s of cutStock) {
       const key = `${s.sku}|${s.size}`;
-      map.set(key, (map.get(key) ?? 0) + s.qty);
+      const m = s.individual ? ind : reg;
+      m.set(key, (m.get(key) ?? 0) + s.qty);
     }
-    return map;
+    return { reg, ind };
   }, [cutStock]);
+
+  // Доступний крій для конкретного замовлення — з відповідного пулу.
+  const availFor = (o: { sku: string; size: string; individual?: boolean }) =>
+    (o.individual ? stockMaps.ind : stockMaps.reg).get(`${o.sku}|${o.size}`) ?? 0;
 
   const filtered = useMemo(() => {
     const withoutPending = orders.filter((o) => !pendingArchiveIds.current.has(o.id));
@@ -204,7 +211,7 @@ export const OrdersPage = ({ filterBy, emptyText, actions }: Props) => {
       console.log("[CUT] partial: updating dtId", order.dtId, "to_sew →", remainder);
       optimisticUpdate(order.id, { quantity: remainder });
       updateOrder(order.dtId, order, { to_sew: remainder })
-        .then(() => { console.log("[CUT] update OK, creating cutting order…"); return createCuttingOrder(order, qty, "", "cutting"); })
+        .then(() => { console.log("[CUT] update OK, creating cutting order…"); return createCuttingOrder(order, qty, "", "cutting", order.individual); })
         .then(() => { console.log("[CUT] create OK, invalidating in 3s"); setTimeout(() => qc.invalidateQueries({ queryKey: ["orders"] }), 3000); })
         .catch((err) => {
           console.error("[CUT] Partial cut failed:", err);
@@ -212,7 +219,7 @@ export const OrdersPage = ({ filterBy, emptyText, actions }: Props) => {
           qc.invalidateQueries({ queryKey: ["orders"] });
         });
     } else {
-      createCuttingOrder(order, qty, "", "cutting")
+      createCuttingOrder(order, qty, "", "cutting", order.individual)
         .then(() => setTimeout(() => qc.invalidateQueries({ queryKey: ["orders"] }), 3000));
     }
   };
@@ -229,7 +236,7 @@ export const OrdersPage = ({ filterBy, emptyText, actions }: Props) => {
     const maxQty = order.cutting_qty || order.quantity;
     const isFullQty = qty >= maxQty;
 
-    addToStock({ sku: order.sku, size: order.size, qty, shelf: "", cutDate: new Date().toISOString().split("T")[0] });
+    addToStock({ sku: order.sku, size: order.size, qty, shelf: "", cutDate: new Date().toISOString().split("T")[0], individual: order.individual });
 
     if (isFullQty) {
       // Повне — архівуємо весь ордер
@@ -258,7 +265,7 @@ export const OrdersPage = ({ filterBy, emptyText, actions }: Props) => {
 
   // "В пошив" — відкриває модал з кількістю (часткова подача можлива)
   const handleSew = (order: Order) => {
-    const avail = stockMap.get(`${order.sku}|${order.size}`) ?? 0;
+    const avail = availFor(order);
     setSewModal({ order, qty: Math.min(avail, order.quantity) });
   };
 
@@ -267,8 +274,8 @@ export const OrdersPage = ({ filterBy, emptyText, actions }: Props) => {
     const { order, qty } = sewModal;
     setSewModal(null);
 
-    // Списуємо зі складу крою
-    const available = cutStock.filter((s) => s.sku === order.sku && s.size === order.size);
+    // Списуємо зі складу крою — лише з відповідного пулу (інд./складський).
+    const available = cutStock.filter((s) => s.sku === order.sku && s.size === order.size && !!s.individual === !!order.individual);
     let remaining = qty;
     for (const item of available) {
       if (remaining <= 0) break;
@@ -291,13 +298,13 @@ export const OrdersPage = ({ filterBy, emptyText, actions }: Props) => {
       const remainder = order.quantity - qty;
       optimisticUpdate(order.id, { quantity: remainder });
       updateOrder(order.dtId, order, { to_sew: remainder });
-      createCuttingOrder(order, qty, "", "in-progress")
+      createCuttingOrder(order, qty, "", "in-progress", order.individual)
         .then(() => setTimeout(() => {
           qc.invalidateQueries({ queryKey: ["cutStock"] });
           qc.invalidateQueries({ queryKey: ["orders"] });
         }, 3000));
     } else {
-      createCuttingOrder(order, qty, "", "in-progress")
+      createCuttingOrder(order, qty, "", "in-progress", order.individual)
         .then(() => setTimeout(() => {
           qc.invalidateQueries({ queryKey: ["cutStock"] });
           qc.invalidateQueries({ queryKey: ["orders"] });
@@ -325,10 +332,10 @@ export const OrdersPage = ({ filterBy, emptyText, actions }: Props) => {
       // Часткове — зменшуємо оригінал, створюємо новий in-progress
       optimisticUpdate(order.id, { cutting_qty: remainder, quantity: remainder });
       updateOrder(order.dtId, order, { cutting_qty: remainder, to_sew: remainder });
-      createCuttingOrder(order, qty, "", "in-progress")
+      createCuttingOrder(order, qty, "", "in-progress", order.individual)
         .then(() => setTimeout(() => qc.invalidateQueries({ queryKey: ["orders"] }), 3000));
     } else {
-      createCuttingOrder(order, qty, "", "in-progress")
+      createCuttingOrder(order, qty, "", "in-progress", order.individual)
         .then(() => setTimeout(() => qc.invalidateQueries({ queryKey: ["orders"] }), 3000));
     }
   };
@@ -558,7 +565,7 @@ export const OrdersPage = ({ filterBy, emptyText, actions }: Props) => {
                 onToggleSelect={toggleBulk}
                 onCut={actions.cut ? handleCut : undefined}
                 onSew={actions.sew ? handleSew : undefined}
-                hasStock={stockMap.get(`${order.sku}|${order.size}`) ? (stockMap.get(`${order.sku}|${order.size}`)! > 0) : false}
+                hasStock={availFor(order) > 0}
                 onShelf={actions.shelf ? openShelfModal : undefined}
                 onCutToSew={actions.cutToSew ? handleCutToSew : undefined}
                 onBack={actions.backToIncoming ? (o) => handleUpdate(o, "incoming") : undefined}
@@ -618,8 +625,8 @@ export const OrdersPage = ({ filterBy, emptyText, actions }: Props) => {
                     />
                   )}
                   {(() => {
-                    const avail = stockMap.get(`${selected.sku}|${selected.size}`);
-                    return avail !== undefined && avail > 0 ? (
+                    const avail = availFor(selected);
+                    return avail > 0 ? (
                       <Detail icon={<Layers size={14} />} label="На складі (крій)" value={`${avail} шт`} tone="tone-green" />
                     ) : null;
                   })()}
@@ -640,7 +647,7 @@ export const OrdersPage = ({ filterBy, emptyText, actions }: Props) => {
                   </button>
                 )}
                 {actions.sew && selected.status === "incoming" && (() => {
-                  const avail = stockMap.get(`${selected.sku}|${selected.size}`) ?? 0;
+                  const avail = availFor(selected);
                   return (
                     <button
                       className="btn ghost"
@@ -705,7 +712,7 @@ export const OrdersPage = ({ filterBy, emptyText, actions }: Props) => {
       )}
 
       {sewModal && (() => {
-        const avail = stockMap.get(`${sewModal.order.sku}|${sewModal.order.size}`) ?? 0;
+        const avail = availFor(sewModal.order);
         return (
           <div className="modal-overlay" onClick={() => setSewModal(null)}>
             <div className="modal" onClick={(e) => e.stopPropagation()}>

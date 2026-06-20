@@ -1,6 +1,6 @@
 import type { Order } from "../types";
 import { priorityTone, statusLabel, statusTone } from "../theme";
-import { AlertTriangle, Pencil } from "lucide-react";
+import { AlertTriangle, Pencil, Trash2 } from "lucide-react";
 import { getPhotoUrl } from "../lib/photos";
 import type { MouseEvent } from "react";
 
@@ -16,6 +16,7 @@ type Props = {
   hasStock?: boolean;
   onShelf?: (order: Order) => void;
   onCutToSew?: (order: Order) => void;
+  onCancelCut?: (order: Order) => void;
   onBack?: (order: Order) => void;
   onDone?: (order: Order) => void;
   onEdit?: (order: Order) => void;
@@ -34,6 +35,7 @@ export const OrderCard = ({
   hasStock,
   onShelf,
   onCutToSew,
+  onCancelCut,
   onBack,
   onDone,
   onEdit,
@@ -96,8 +98,19 @@ export const OrderCard = ({
             <div className="mini-title">{order.productType}</div>
           </div>
         </div>
-        <div className={`pill ${isIndividual ? "tone-red" : tone}`}>
-          {isIndividual ? (dueShort ? `до ${dueShort}` : "Індив.") : order.priority}
+        <div className="card-head-right">
+          <div className={`pill ${isIndividual ? "tone-red" : tone}`}>
+            {isIndividual ? (dueShort ? `до ${dueShort}` : "Індив.") : order.priority}
+          </div>
+          {onCancelCut && order.status === "cutting" && (
+            <button
+              className="card-del"
+              title="Відмінити розкрій — повернути в чергу пошиву"
+              onClick={(e) => { stop(e); onCancelCut(order); }}
+            >
+              <Trash2 size={15} />
+            </button>
+          )}
         </div>
       </div>
 

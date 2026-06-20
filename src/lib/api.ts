@@ -388,6 +388,19 @@ export async function createIncomingOrder(fields: {
   });
 }
 
+/**
+ * Чисте видалення рядка замовлення з kufaika_orders (без переносу в архів).
+ * Гілка action="delete" у вебхуку kufaika-status-update → DT Delete Order Only.
+ */
+export async function deleteOrder(dtId: number): Promise<void> {
+  const updateUrl = WEBHOOK_STATUS_UPDATE || WEBHOOK_STATUS;
+  if (!updateUrl) {
+    console.info(`[mock] deleteOrder dtId=${dtId}`);
+    return;
+  }
+  await ky.post(updateUrl, { json: { action: "delete", dtId }, timeout: 10000 });
+}
+
 export async function archiveOrder(order: Order): Promise<void> {
   if (!WEBHOOK_ARCHIVE) {
     console.info(`[mock] archiveOrder sku=${order.sku} status=${order.status}`);

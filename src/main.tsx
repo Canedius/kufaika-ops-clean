@@ -45,7 +45,7 @@ const router = createBrowserRouter([
             key="cutting"
             filterBy={["cutting"]}
             emptyText="Тут немає позицій в розкрої."
-            actions={{ shelf: true, cutToSew: true }}
+            actions={{ shelf: true, cutToSew: true, cancelCut: true }}
           />
         ),
       },

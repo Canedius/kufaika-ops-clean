@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { FilterBar } from "./FilterBar";
 import { OrderCard } from "./OrderCard";
-import { fetchOrders, fetchCutStock, updateOrder, editOrder, consumeFromStock, addToStock, createCuttingOrder, createIncomingOrder, archiveOrder, formatDate, PRODUCT_CATALOG, COLOR_CATALOG, FABRIC_OPTIONS, fabricFromSku } from "../lib/api";
+import { fetchOrders, fetchCutStock, updateOrder, editOrder, consumeFromStock, addToStock, createCuttingOrder, createIncomingOrder, archiveOrder, deleteOrder, formatDate, PRODUCT_CATALOG, COLOR_CATALOG, FABRIC_OPTIONS, fabricFromSku } from "../lib/api";
 import type { Order, OrderStatus, Priority, CutStockItem, SortLevel } from "../types";
 import { priorityTone, statusLabel, statusTone } from "../theme";
 import { getPhotoUrl } from "../lib/photos";
@@ -65,6 +65,7 @@ type Props = {
     complete?: boolean;
     backToIncoming?: boolean;
     cutToSew?: boolean;
+    cancelCut?: boolean;
   };
 };
 
@@ -314,6 +315,43 @@ export const OrdersPage = ({ filterBy, emptyText, actions }: Props) => {
 
   const handleCutToSew = (order: Order) => {
     setCutToSewModal({ order, qty: order.cutting_qty || order.quantity });
+  };
+
+  // "Відмінити розкрій" — повертає кількість із розкрою назад у чергу пошиву.
+  // Якщо для цього sku+size вже є замовлення в пошиві (incoming) — додаємо кількість
+  // до нього і видаляємо рядок розкрою (без дублювання картки). Якщо такого немає
+  // (напр., повний розкрій того ж рядка) — просто повертаємо рядок у incoming.
+  const handleCancelCut = (order: Order) => {
+    if (!order.dtId) return;
+    const qty = order.cutting_qty || order.quantity;
+    const target = orders.find(
+      (o) =>
+        o.status === "incoming" &&
+        o.dtId != null &&
+        o.dtId !== order.dtId &&
+        o.sku === order.sku &&
+        o.size === order.size &&
+        !!o.individual === !!order.individual,
+    );
+
+    if (target && target.dtId != null) {
+      // Мердж у наявне замовлення в пошиві + видалення рядка розкрою.
+      optimisticUpdate(target.id, { quantity: target.quantity + qty });
+      pendingArchiveIds.current.add(order.id);
+      optimisticUpdate(order.id, { status: "archived" });
+      updateOrder(target.dtId, target, { to_sew: target.quantity + qty })
+        .then(() => deleteOrder(order.dtId!))
+        .then(() => setTimeout(() => qc.invalidateQueries({ queryKey: ["orders"] }), 3000))
+        .catch(() => {
+          pendingArchiveIds.current.delete(order.id);
+          qc.invalidateQueries({ queryKey: ["orders"] });
+        });
+    } else {
+      // Немає куди мерджити — повертаємо цей же рядок у пошив.
+      optimisticUpdate(order.id, { status: "incoming", cutting_qty: 0 });
+      updateOrder(order.dtId, order, { status: "incoming", cutting_qty: 0 })
+        .then(() => setTimeout(() => qc.invalidateQueries({ queryKey: ["orders"] }), 3000));
+    }
   };
 
   const handleCutToSewConfirm = () => {
@@ -568,6 +606,7 @@ export const OrdersPage = ({ filterBy, emptyText, actions }: Props) => {
                 hasStock={availFor(order) > 0}
                 onShelf={actions.shelf ? openShelfModal : undefined}
                 onCutToSew={actions.cutToSew ? handleCutToSew : undefined}
+                onCancelCut={actions.cancelCut ? handleCancelCut : undefined}
                 onBack={actions.backToIncoming ? (o) => handleUpdate(o, "incoming") : undefined}
                 onDone={actions.complete ? handleComplete : undefined}
                 onEdit={order.individual && order.status === "incoming" ? (o) => openEditGroup([o]) : undefined}
@@ -667,6 +706,11 @@ export const OrdersPage = ({ filterBy, emptyText, actions }: Props) => {
                 {actions.cutToSew && selected.status === "cutting" && (
                   <button className="btn ghost" onClick={() => handleCutToSew(selected)}>
                     В пошив
+                  </button>
+                )}
+                {actions.cancelCut && selected.status === "cutting" && (
+                  <button className="btn danger" onClick={() => handleCancelCut(selected)}>
+                    Відмінити розкрій
                   </button>
                 )}
                 {actions.backToIncoming && selected.status === "in-progress" && (

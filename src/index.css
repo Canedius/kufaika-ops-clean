@@ -786,6 +786,32 @@ a {
   width: 100%;
   box-sizing: border-box;
 }
+.order-type-toggle {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+.order-type-btn {
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 10px 12px;
+  font-family: inherit;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--muted);
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+.order-type-btn:hover {
+  color: var(--text);
+  border-color: var(--accent, #f97316);
+}
+.order-type-btn.is-active {
+  background: var(--accent, #f97316);
+  border-color: var(--accent, #f97316);
+  color: #fff;
+}
 .modal-actions {
   display: flex;
   gap: 8px;

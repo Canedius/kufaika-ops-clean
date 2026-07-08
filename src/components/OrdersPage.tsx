@@ -32,6 +32,7 @@ type NewOrderForm = {
   positions: PositionForm[]; // одна задача може містити кілька позицій
   comment: string;
   dueDate: string; // YYYY-MM-DD — на яке число пошити
+  individual: boolean; // true → індивідуальне замовлення, false → складське
 };
 
 const todayIso = () => {
@@ -53,6 +54,7 @@ const emptyNewOrderForm = (): NewOrderForm => ({
   positions: [emptyPosition()],
   comment: "",
   dueDate: todayIso(),
+  individual: true,
 });
 
 type Props = {
@@ -445,7 +447,7 @@ export const OrdersPage = ({ filterBy, emptyText, actions }: Props) => {
           color: pos.color,
           launchDate: f.dueDate,
           comment,
-          individual: true,
+          individual: f.individual,
           fabric: pos.fabric || undefined,
         }),
       ),
@@ -486,6 +488,7 @@ export const OrdersPage = ({ filterBy, emptyText, actions }: Props) => {
       positions: positions.length ? positions : [emptyPosition()],
       comment,
       dueDate: earliestIso || todayIso(),
+      individual: !!members[0].individual,
     });
     setNewOrderOpen(true);
   };
@@ -524,11 +527,11 @@ export const OrdersPage = ({ filterBy, emptyText, actions }: Props) => {
           launchDate: f.dueDate, qty: d.qty, comment,
         }));
       } else {
-        // Кожна нова позиція — окрема індивідуальна задача (без обʼєднання в групу).
+        // Кожна нова позиція — окрема задача (без обʼєднання в групу).
         ops.push(createIncomingOrder({
           productType: d.productType, size: d.size, qty: d.qty, priority: "Низький",
           sku: d.sku, color: d.color, launchDate: f.dueDate, comment: comment || undefined,
-          individual: true, fabric: d.fabric || undefined,
+          individual: f.individual, fabric: d.fabric || undefined,
         }));
       }
     }
@@ -860,6 +863,26 @@ export const OrdersPage = ({ filterBy, emptyText, actions }: Props) => {
             <div className="modal modal--new-order" onClick={(e) => e.stopPropagation()}>
               <div className="modal-title">
                 {isEdit ? "Редагувати задачу" : "Нова задача"}{multi ? ` · ${newOrderForm.positions.length} позицій` : ""}
+              </div>
+
+              <div className="modal-field">
+                <label>Тип замовлення *</label>
+                <div className="order-type-toggle">
+                  <button
+                    type="button"
+                    className={`order-type-btn${newOrderForm.individual ? " is-active" : ""}`}
+                    onClick={() => setNewOrderForm((f) => ({ ...f, individual: true }))}
+                  >
+                    🧵 Індивідуальне
+                  </button>
+                  <button
+                    type="button"
+                    className={`order-type-btn${!newOrderForm.individual ? " is-active" : ""}`}
+                    onClick={() => setNewOrderForm((f) => ({ ...f, individual: false }))}
+                  >
+                    📦 Складське
+                  </button>
+                </div>
               </div>
 
               {newOrderForm.positions.map((pos, i) => {

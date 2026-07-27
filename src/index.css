@@ -954,6 +954,24 @@ a {
   font-size: 11px;
 }
 
+.modal-sku-preview {
+  margin-top: 10px;
+  font-size: 12px;
+  color: var(--muted);
+  letter-spacing: 0.02em;
+}
+
+.modal-sku-preview strong {
+  color: var(--text);
+  font-weight: 600;
+}
+
+.modal-sku-warn {
+  display: block;
+  margin-top: 3px;
+  color: #d08700;
+}
+
 .modal-stock-hint {
   display: flex;
   align-items: center;

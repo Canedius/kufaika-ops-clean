@@ -50,6 +50,17 @@ const emptyPosition = (): PositionForm => ({
   fabric: "",
 });
 
+// Назва кольору з бази/ручного вводу може мати емодзі, зайві пробіли чи інший регістр —
+// зводимо до канонічного вигляду, щоб знайти код у COLOR_CATALOG.
+const normalizeColorName = (s: string) =>
+  s.replace(/[^\p{L}\p{N}\s-]/gu, "").trim().toLowerCase().replace(/\s+/g, " ");
+
+const colorCodeByName = (name: string): string => {
+  const n = normalizeColorName(name);
+  if (!n) return "";
+  return COLOR_CATALOG.find((c) => normalizeColorName(c.name) === n)?.code || "";
+};
+
 const emptyNewOrderForm = (): NewOrderForm => ({
   positions: [emptyPosition()],
   comment: "",
@@ -411,10 +422,13 @@ export const OrdersPage = ({ filterBy, emptyText, actions }: Props) => {
   const buildPosition = (p: PositionForm) => {
     const product = PRODUCT_CATALOG.find((pr) => pr.code === p.productCode);
     const customName = p.customColorName.trim();
-    const effectiveColorCode = customName ? "XX" : p.colorCode;
+    // Якщо введена вручну назва збігається з каталожною — це звичайний колір, а не "свій":
+    // беремо його справжній код, інакше SKU вийшов би з маркером XX.
+    const matchedCode = customName ? colorCodeByName(customName) : "";
+    const effectiveColorCode = customName ? matchedCode || "XX" : p.colorCode;
     if (!product || (!customName && !p.colorCode) || !p.size || p.qty < 1) return null;
-    const catalogName = COLOR_CATALOG.find((c) => c.code === p.colorCode)?.name;
-    const effectiveColorName = customName || catalogName || effectiveColorCode;
+    const catalogName = COLOR_CATALOG.find((c) => c.code === effectiveColorCode)?.name;
+    const effectiveColorName = catalogName || customName || effectiveColorCode;
     const autoSku = `${p.productCode}${effectiveColorCode}${p.size}`;
     return {
       productType: product.name,
@@ -465,11 +479,11 @@ export const OrdersPage = ({ filterBy, emptyText, actions }: Props) => {
 
   const orderToPosition = (o: Order): PositionForm => {
     const product = PRODUCT_CATALOG.find((p) => p.name === o.productType);
-    const colorMatch = COLOR_CATALOG.find((c) => c.name === o.color);
+    const matchedCode = colorCodeByName(o.color || "");
     return {
       productCode: product?.code || "",
-      colorCode: colorMatch?.code || "",
-      customColorName: colorMatch ? "" : (o.color || ""),
+      colorCode: matchedCode,
+      customColorName: matchedCode ? "" : (o.color || ""),
       size: o.size,
       qty: o.quantity,
       sku: "", // перерахуємо при збереженні
@@ -925,6 +939,7 @@ export const OrdersPage = ({ filterBy, emptyText, actions }: Props) => {
                         onChange={(e) => updatePosition(i, {
                           productCode: e.target.value,
                           colorCode: "",
+                          customColorName: "",
                           size: "",
                           sku: "",
                           fabric: fabricFromSku(`${e.target.value}XX`) || "",
@@ -1013,6 +1028,22 @@ export const OrdersPage = ({ filterBy, emptyText, actions }: Props) => {
                         </select>
                       </div>
                     </div>
+
+                    {(() => {
+                      const built = buildPosition(pos);
+                      if (!built) return null;
+                      const isCustomColor = /^KUF\d{3}XX/.test(built.sku);
+                      return (
+                        <div className="modal-sku-preview">
+                          SKU: <strong>{built.sku}</strong>
+                          {isCustomColor && (
+                            <span className="modal-sku-warn">
+                              нестандартний колір «{customName}» → код XX
+                            </span>
+                          )}
+                        </div>
+                      );
+                    })()}
                   </div>
                 );
               })}

@@ -7,6 +7,7 @@ import {
 import { Download, Printer, ArrowUp, ArrowDown } from "lucide-react";
 import { fetchOrders } from "../lib/api";
 import { useExcelExport } from "../hooks/useExcelExport";
+import { CutRecoTable } from "./CutRecoTable";
 import type { Order, Priority } from "../types";
 
 const SIZE_COLUMNS = ["XS", "XS/S", "S", "M", "M/L", "L", "XL", "XL/2XL", "2XL", "3XL"];
@@ -342,6 +343,8 @@ export const AnalyticsPage = () => {
           </table>
         </div>
       </div>
+
+      <CutRecoTable />
 
       <div className="analytics-charts">
         <div className="analytics-section analytics-section--half">

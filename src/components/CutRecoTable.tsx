@@ -3,7 +3,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Scissors, AlertTriangle, Clock, PackageCheck, TrendingDown, ArrowUp, ArrowDown, RotateCcw, Loader2, Undo2 } from "lucide-react";
 import {
   getCutReco, fetchCutReco, refreshCutReco, groupByProduct, buildRuns, summarize,
-  applySent, loadSent, saveSent, sendRowToCut,
+  applySent, loadSent, saveSent, sendRowToCut, cutRecoLive,
   type CutRecoRow, type SentMap,
 } from "../lib/cutReco";
 
@@ -134,7 +134,17 @@ export const CutRecoTable = () => {
         </h2>
         <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
           <span className="muted" style={{ fontSize: 12 }}>знімок {fmtDate(data.generatedAt)} · {kpi.skuCount} SKU</span>
-          <button className="btn mini ghost" onClick={onRefresh} disabled={refreshing || isFetching} title="Перерахувати зараз (n8n)">
+          {!cutRecoLive.get && (
+            <span className="cutreco-offline-badge" title="VITE_N8N_CUTRECO_GET не заданий у цьому білді — показано вбудований знімок, не живі дані">
+              офлайн-знімок
+            </span>
+          )}
+          <button
+            className="btn mini ghost"
+            onClick={onRefresh}
+            disabled={refreshing || isFetching || !cutRecoLive.refresh}
+            title={cutRecoLive.refresh ? "Перерахувати зараз (n8n)" : "Перерахунок недоступний: у цьому білді не заданий VITE_N8N_CUTRECO_REFRESH"}
+          >
             {refreshing ? <Loader2 size={14} className="cutreco-spin" /> : <RotateCcw size={14} />}
             <span className="btn-label">{refreshing ? "Оновлюю…" : "Оновити"}</span>
           </button>

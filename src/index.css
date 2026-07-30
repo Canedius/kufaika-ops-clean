@@ -1348,6 +1348,10 @@ a {
 .cutreco-h3-row { display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap; }
 .cutreco-h3-tools { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
 .cutreco-toggle { font-size: 13px; color: var(--muted); display: flex; align-items: center; gap: 6px; cursor: pointer; }
+.cutreco-offline-badge {
+  font-size: 11px; font-weight: 600; color: #92400e;
+  background: #fef3c7; border: 1px solid #fde68a; border-radius: 999px; padding: 1px 8px;
+}
 .cutreco-sent-badge {
   display: inline-flex; align-items: center; gap: 6px;
   font-size: 12px; font-weight: 600; color: #1d4ed8;

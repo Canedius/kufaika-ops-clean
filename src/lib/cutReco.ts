@@ -5,6 +5,12 @@ import { createCuttingOrder, fabricFromSku } from "./api";
 const CUTRECO_GET = import.meta.env.VITE_N8N_CUTRECO_GET;
 const CUTRECO_REFRESH = import.meta.env.VITE_N8N_CUTRECO_REFRESH;
 
+/**
+ * Чи налаштовані вебхуки. Без них модуль мовчки живе на bundled-знімку, а «Оновити»
+ * нічого не робить — тому стан показуємо в інтерфейсі, а не тільки в консолі.
+ */
+export const cutRecoLive = { get: !!CUTRECO_GET, refresh: !!CUTRECO_REFRESH };
+
 export type CutStatus = "red" | "yellow" | "green";
 export type CutDriver = "pull" | "seasonal";
 

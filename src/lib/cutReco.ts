@@ -2,8 +2,11 @@ import ky from "ky";
 import snapshot from "../data/cutRecoSnapshot.json";
 import { createCuttingOrder, fabricFromSku } from "./api";
 
-const CUTRECO_GET = import.meta.env.VITE_N8N_CUTRECO_GET;
-const CUTRECO_REFRESH = import.meta.env.VITE_N8N_CUTRECO_REFRESH;
+// Дефолтні вебхуки n8n — щоб модуль працював навіть там, де env не долетіли в білд
+// (напр. Vercel без VITE_N8N_CUTRECO_*). env, якщо заданий, завжди має пріоритет.
+const N8N_BASE = "https://primary-production-eeb3.up.railway.app/webhook";
+const CUTRECO_GET = import.meta.env.VITE_N8N_CUTRECO_GET || `${N8N_BASE}/kufaika-cutreco-get`;
+const CUTRECO_REFRESH = import.meta.env.VITE_N8N_CUTRECO_REFRESH || `${N8N_BASE}/kufaika-cutreco-refresh`;
 
 /**
  * Чи налаштовані вебхуки. Без них модуль мовчки живе на bundled-знімку, а «Оновити»

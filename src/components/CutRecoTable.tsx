@@ -20,8 +20,13 @@ export const CutRecoTable = () => {
   const { data = getCutReco(), refetch, isFetching } = useQuery({
     queryKey: ["cutReco"],
     queryFn: fetchCutReco,
+    // Вбудований знімок — лише щоб було що показати в першу мить. Позначаємо його
+    // застарілим (updatedAt = 0), інакше staleTime тримав би статичний JSON 5 хв
+    // і живі дані з n8n не тягнулись би до ручного «Оновити».
     initialData: getCutReco(),
+    initialDataUpdatedAt: 0,
     staleTime: 5 * 60_000,
+    refetchOnWindowFocus: true,
   });
   const [refreshing, setRefreshing] = useState(false);
   const [elapsed, setElapsed] = useState(0);

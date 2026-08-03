@@ -89,30 +89,41 @@ export async function refreshCutReco(): Promise<void> {
   await ky.post(CUTRECO_REFRESH, { timeout: 200000 });
 }
 
-/** Скільки штук уже кинуто в розкрій із поточного знімка: sku → шт. */
-export type SentMap = Record<string, number>;
+/** Одна відмітка про відправлений крій: скільки штук і коли (ISO). */
+export interface SentEntry { qty: number; at: string }
+/** Журнал відправленого в розкрій: sku → відмітка. */
+export type SentMap = Record<string, SentEntry>;
 
 const SENT_KEY = "kufaika:cutreco:sent";
 
 /**
- * Журнал уже відправлених у розкрій позицій. Прив'язаний до `generatedAt` знімка:
- * після наступного перерахунку n8n цей крій уже сидить у ланцюгу (cutting), тому
- * журнал скидається — інакше дефіцит віднявся б двічі.
+ * Журнал уже відправлених у розкрій позицій.
+ *
+ * Відмітка живе, поки не прийде знімок, згенерований *пізніше* за момент відправки —
+ * такий знімок уже бачить цю задачу в ланцюгу (cutting), тож віднімати вдруге не можна.
+ * Прив'язка саме до часу, а не до факту зміни знімка: інакше знімок, зроблений до кліку,
+ * стирав би свіжу відмітку й позиція поверталася б у таблицю.
  */
 export function loadSent(generatedAt: string): SentMap {
   try {
     const raw = localStorage.getItem(SENT_KEY);
     if (!raw) return {};
-    const parsed = JSON.parse(raw) as { generatedAt?: string; sent?: SentMap };
-    return parsed.generatedAt === generatedAt ? parsed.sent || {} : {};
+    const parsed = JSON.parse(raw) as { sent?: SentMap };
+    const sent = parsed.sent || {};
+    const snapshotAt = Date.parse(generatedAt) || 0;
+    const fresh: SentMap = {};
+    for (const [sku, e] of Object.entries(sent)) {
+      if (e && typeof e.qty === "number" && (Date.parse(e.at) || 0) > snapshotAt) fresh[sku] = e;
+    }
+    return fresh;
   } catch {
     return {};
   }
 }
 
-export function saveSent(generatedAt: string, sent: SentMap): void {
+export function saveSent(sent: SentMap): void {
   try {
-    localStorage.setItem(SENT_KEY, JSON.stringify({ generatedAt, sent }));
+    localStorage.setItem(SENT_KEY, JSON.stringify({ sent }));
   } catch {
     /* приватний режим / переповнене сховище — журнал просто не переживе перезавантаження */
   }
@@ -125,7 +136,7 @@ export function applySent(data: CutRecoData, sent: SentMap): CutRecoData {
     ...data,
     rows: data.rows.map((r) => {
       const s = sent[r.sku];
-      return s ? { ...r, deficit: Math.max(0, r.deficit - s) } : r;
+      return s ? { ...r, deficit: Math.max(0, r.deficit - s.qty) } : r;
     }),
   };
 }

@@ -42,9 +42,11 @@ export const CutRecoTable = () => {
 
   // --- Уже кинуте в розкрій із цього знімка (локально, до наступного перерахунку) ---
   const [sent, setSent] = useState<SentMap>(() => loadSent(data.generatedAt));
+  // Новий знімок може бути старшим за відмітку (його порахували до кліку) — тоді
+  // відмітка лишається, інакше позиція повернулась би в таблицю.
   useEffect(() => { setSent(loadSent(data.generatedAt)); }, [data.generatedAt]);
-  const sentTotal = useMemo(() => Object.values(sent).reduce((s, n) => s + n, 0), [sent]);
-  const resetSent = () => { setSent({}); saveSent(data.generatedAt, {}); };
+  const sentTotal = useMemo(() => Object.values(sent).reduce((s, e) => s + e.qty, 0), [sent]);
+  const resetSent = () => { setSent({}); saveSent({}); };
 
   // Усі похідні розрахунки — на скоригованих даних, тому позиція одразу зменшується/зникає.
   const view = useMemo(() => applySent(data, sent), [data, sent]);
@@ -66,8 +68,8 @@ export const CutRecoTable = () => {
     try {
       await sendRowToCut(row, qty);
       setSent((prev) => {
-        const next = { ...prev, [row.sku]: (prev[row.sku] || 0) + qty };
-        saveSent(data.generatedAt, next);
+        const next: SentMap = { ...prev, [row.sku]: { qty: (prev[row.sku]?.qty || 0) + qty, at: new Date().toISOString() } };
+        saveSent(next);
         return next;
       });
       setCutModal(null);

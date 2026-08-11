@@ -248,6 +248,8 @@ export const CutRecoTable = () => {
       ) : groups.map((g) => {
         const cell = new Map<string, CutRecoRow>();
         for (const r of g.rows) cell.set(`${r.color}|${r.size}`, r);
+        // Та сама структура, що й у «лише проблемні»: колір — зліва, розмір — зверху.
+        const gSizes = view.sizeOrder.filter((s) => g.rows.some((r) => r.size === s));
         const runsForRatio = buildRuns(g, view);
         const isSeasonal = g.rows.some((r) => r.driver === "seasonal");
         return (
@@ -267,25 +269,28 @@ export const CutRecoTable = () => {
               <table className="matrix-table cutreco-table">
                 <thead>
                   <tr>
-                    <th className="matrix-header matrix-header--label">Розмір</th>
-                    {g.colors.map((c) => <th key={c} className="matrix-header">{c}</th>)}
+                    <th className="matrix-header matrix-header--label">Колір</th>
+                    {gSizes.map((s) => <th key={s} className="matrix-header">{s}</th>)}
+                    <th className="matrix-header matrix-header--total">
+                      <span className="matrix-header-inner matrix-header-inner--center">Σ</span>
+                    </th>
                   </tr>
                 </thead>
                 <tbody>
-                  {view.sizeOrder.map((size) => {
-                    if (!g.rows.some((r) => r.size === size)) return null;
+                  {g.colors.map((color) => {
+                    const rowTotal = g.rows.reduce((s, r) => (r.color === color ? s + Math.max(0, r.deficit) : s), 0);
                     return (
-                      <tr key={size}>
-                        <td className="matrix-label"><span className="matrix-label-name">{size}</span></td>
-                        {g.colors.map((color) => {
+                      <tr key={color}>
+                        <td className="matrix-label"><span className="matrix-label-name">{color}</span></td>
+                        {gSizes.map((size) => {
                           const r = cell.get(`${color}|${size}`);
-                          if (!r) return <td key={color} className="matrix-cell matrix-cell--empty" />;
+                          if (!r) return <td key={size} className="matrix-cell matrix-cell--empty" />;
                           const seasonalCell = r.driver === "seasonal";
                           const title = seasonalCell
                             ? `${color} ${size} · вистачить на ${r.coverDays} дн (зимовий темп ${r.adu}/дн) · сезонна підготовка: торік ~${r.aduForward}/дн ×ріст, поточний темп ${r.aduTrailing}/дн · ланцюг ${r.position} шт`
                             : `${color} ${size} · вистачить на ${r.coverDays} дн · ланцюг ${r.position} шт · продаж ${r.adu}/дн`;
                           return (
-                            <td key={color} className={`matrix-cell cutreco-cell cutreco-cell--${r.status} cutreco-cell--click`}
+                            <td key={size} className={`matrix-cell cutreco-cell cutreco-cell--${r.status} cutreco-cell--click`}
                               role="button" tabIndex={0}
                               onClick={() => openCut(r)}
                               onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); openCut(r); } }}
@@ -296,6 +301,7 @@ export const CutRecoTable = () => {
                             </td>
                           );
                         })}
+                        <td className="matrix-total-col">{rowTotal}</td>
                       </tr>
                     );
                   })}

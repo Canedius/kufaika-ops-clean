@@ -252,12 +252,21 @@ export async function fetchCutStock(): Promise<CutStockItem[]> {
   }
 }
 
-export async function updateCutStockQty(dtId: number, qty: number): Promise<void> {
+/**
+ * n8n перезаписує весь рядок крою, тому status і shelf треба слати разом із кількістю —
+ * інакше вони затираються, а крій із порожнім статусом випадає з рекомендацій розкрою.
+ */
+export async function updateCutStockQty(
+  dtId: number,
+  qty: number,
+  status: CutStockItem["status"] = "available",
+  shelf = "",
+): Promise<void> {
   if (!WEBHOOK_CUTSTOCK) {
-    console.info(`[mock] updateCutStockQty dtId=${dtId} qty=${qty}`);
+    console.info(`[mock] updateCutStockQty dtId=${dtId} qty=${qty} status=${status}`);
     return;
   }
-  await ky.post(WEBHOOK_CUTSTOCK, { json: { action: "update", dtId, qty }, timeout: 10000 });
+  await ky.post(WEBHOOK_CUTSTOCK, { json: { action: "update", dtId, qty, status, shelf }, timeout: 10000 });
 }
 
 export async function consumeFromStock(stockId: string, qty: number, dtId?: number, currentQty?: number): Promise<void> {

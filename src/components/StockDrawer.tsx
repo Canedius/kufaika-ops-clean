@@ -24,8 +24,8 @@ export const StockDrawer = ({ open, onClose }: Props) => {
   const [sewPending, setSewPending] = useState(false);
 
   const updateMutation = useMutation({
-    mutationFn: ({ dtId, qty }: { dtId: number; qty: number }) =>
-      updateCutStockQty(dtId, qty),
+    mutationFn: ({ dtId, qty, status, shelf }: { dtId: number; qty: number; status: CutStockItem["status"]; shelf: string }) =>
+      updateCutStockQty(dtId, qty, status, shelf),
     onSuccess: () => {
       setEditingDtId(null);
       setTimeout(() => queryClient.invalidateQueries({ queryKey: ["cutStock"] }), 2000);
@@ -95,7 +95,13 @@ export const StockDrawer = ({ open, onClose }: Props) => {
   function saveEdit(item: CutStockItem) {
     const qty = parseInt(editQty, 10);
     if (isNaN(qty) || qty < 0 || item.dtId == null) return;
-    updateMutation.mutate({ dtId: item.dtId, qty });
+    updateMutation.mutate({
+      dtId: item.dtId,
+      qty,
+      // порожній статус у старих рядках означає звичайний складський крій
+      status: item.status || "available",
+      shelf: item.shelf || "",
+    });
   }
 
   if (!open) return null;

@@ -22,6 +22,7 @@ type PositionForm = {
   colorCode: string;
   customColorName: string;
   size: string;
+  customProductName: string; // назва виробу, коли обрано «Інші»
   qty: number;
   sku: string; // manual override; empty = auto-generated
   fabric: string;
@@ -40,10 +41,15 @@ const todayIso = () => {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 };
 
+// Псевдо-товар «Інші» — виріб не з каталогу (індивідуальний пошив).
+const OTHER_PRODUCT_CODE = "OTHER";
+const OTHER_SKU_PREFIX = "KUF000";
+
 const emptyPosition = (): PositionForm => ({
   productCode: "",
   colorCode: "",
   customColorName: "",
+  customProductName: "",
   size: "",
   qty: 1,
   sku: "",
@@ -414,25 +420,30 @@ export const OrdersPage = ({ filterBy, emptyText, actions }: Props) => {
 
   const positionValid = (p: PositionForm) => {
     const product = PRODUCT_CATALOG.find((pr) => pr.code === p.productCode);
+    const hasProduct = p.productCode === OTHER_PRODUCT_CODE
+      ? !!p.customProductName.trim()
+      : !!product;
     const hasColor = !!p.customColorName.trim() || !!p.colorCode;
-    return !!product && hasColor && !!p.size && p.qty >= 1;
+    return hasProduct && hasColor && !!p.size.trim() && p.qty >= 1;
   };
 
   // Перетворює позицію форми на дані замовлення (sku/колір/тканина тощо) або null, якщо неповна.
   const buildPosition = (p: PositionForm) => {
     const product = PRODUCT_CATALOG.find((pr) => pr.code === p.productCode);
+    const isOther = p.productCode === OTHER_PRODUCT_CODE;
+    const customProduct = p.customProductName.trim();
     const customName = p.customColorName.trim();
     // Якщо введена вручну назва збігається з каталожною — це звичайний колір, а не "свій":
     // беремо його справжній код, інакше SKU вийшов би з маркером XX.
     const matchedCode = customName ? colorCodeByName(customName) : "";
     const effectiveColorCode = customName ? matchedCode || "XX" : p.colorCode;
-    if (!product || (!customName && !p.colorCode) || !p.size || p.qty < 1) return null;
+    if ((isOther ? !customProduct : !product) || (!customName && !p.colorCode) || !p.size.trim() || p.qty < 1) return null;
     const catalogName = COLOR_CATALOG.find((c) => c.code === effectiveColorCode)?.name;
     const effectiveColorName = catalogName || customName || effectiveColorCode;
-    const autoSku = `${p.productCode}${effectiveColorCode}${p.size}`;
+    const autoSku = `${isOther ? OTHER_SKU_PREFIX : p.productCode}${effectiveColorCode}${p.size.trim()}`;
     return {
-      productType: product.name,
-      size: p.size,
+      productType: isOther ? customProduct : product!.name,
+      size: p.size.trim(),
       qty: p.qty,
       sku: p.sku.trim() || autoSku,
       color: effectiveColorName,
@@ -480,10 +491,12 @@ export const OrdersPage = ({ filterBy, emptyText, actions }: Props) => {
   const orderToPosition = (o: Order): PositionForm => {
     const product = PRODUCT_CATALOG.find((p) => p.name === o.productType);
     const matchedCode = colorCodeByName(o.color || "");
+    const isOther = !product && !!o.productType;
     return {
-      productCode: product?.code || "",
+      productCode: product?.code || (isOther ? OTHER_PRODUCT_CODE : ""),
       colorCode: matchedCode,
       customColorName: matchedCode ? "" : (o.color || ""),
+      customProductName: isOther ? o.productType : "",
       size: o.size,
       qty: o.quantity,
       sku: "", // перерахуємо при збереженні
@@ -901,6 +914,9 @@ export const OrdersPage = ({ filterBy, emptyText, actions }: Props) => {
 
               {newOrderForm.positions.map((pos, i) => {
                 const selectedProduct = PRODUCT_CATALOG.find((p) => p.code === pos.productCode);
+                const isOtherProduct = pos.productCode === OTHER_PRODUCT_CODE;
+                // «Інші» — виріб не з каталогу: кольори всі, назва й розмір вводяться вручну.
+                const productChosen = !!selectedProduct || isOtherProduct;
                 const availableColors = selectedProduct
                   ? COLOR_CATALOG.filter((c) => selectedProduct.colors.includes(c.code))
                   : COLOR_CATALOG;
@@ -938,6 +954,7 @@ export const OrdersPage = ({ filterBy, emptyText, actions }: Props) => {
                         value={pos.productCode}
                         onChange={(e) => updatePosition(i, {
                           productCode: e.target.value,
+                          customProductName: "",
                           colorCode: "",
                           customColorName: "",
                           size: "",
@@ -949,7 +966,17 @@ export const OrdersPage = ({ filterBy, emptyText, actions }: Props) => {
                         {PRODUCT_CATALOG.map((p) => (
                           <option key={p.code} value={p.code}>{p.name} ({p.code})</option>
                         ))}
+                        <option value={OTHER_PRODUCT_CODE}>Інші (свій виріб)</option>
                       </select>
+                      {isOtherProduct && (
+                        <input
+                          className="custom-color-input"
+                          type="text"
+                          placeholder="Назва виробу…"
+                          value={pos.customProductName}
+                          onChange={(e) => updatePosition(i, { customProductName: e.target.value, sku: "" })}
+                        />
+                      )}
                     </div>
 
                     <div className="modal-row-2">
@@ -967,7 +994,7 @@ export const OrdersPage = ({ filterBy, emptyText, actions }: Props) => {
                             </span>
                           )}
                         </label>
-                        <div className={`color-swatches${!selectedProduct ? " color-swatches--disabled" : ""}`}>
+                        <div className={`color-swatches${!productChosen ? " color-swatches--disabled" : ""}`}>
                           {availableColors.map((c) => (
                             <button
                               key={c.code}
@@ -975,7 +1002,7 @@ export const OrdersPage = ({ filterBy, emptyText, actions }: Props) => {
                               className={`color-swatch${!customName && pos.colorCode === c.code ? " color-swatch--active" : ""}`}
                               style={{ background: c.hex }}
                               title={c.name}
-                              disabled={!selectedProduct}
+                              disabled={!productChosen}
                               onClick={() => updatePosition(i, { colorCode: c.code, customColorName: "", sku: "" })}
                             />
                           ))}
@@ -985,22 +1012,31 @@ export const OrdersPage = ({ filterBy, emptyText, actions }: Props) => {
                           type="text"
                           placeholder="Або введіть свій колір…"
                           value={pos.customColorName}
-                          disabled={!selectedProduct}
+                          disabled={!productChosen}
                           onChange={(e) => updatePosition(i, { customColorName: e.target.value, sku: "" })}
                         />
                       </div>
                       <div className="modal-field">
                         <label>Розмір *</label>
-                        <select
-                          value={pos.size}
-                          disabled={!selectedProduct}
-                          onChange={(e) => updatePosition(i, { size: e.target.value, sku: "" })}
-                        >
-                          <option value="">— розмір —</option>
-                          {availableSizes.map((s) => (
-                            <option key={s} value={s}>{s}</option>
-                          ))}
-                        </select>
+                        {isOtherProduct ? (
+                          <input
+                            type="text"
+                            placeholder="Напр. XL або під замір"
+                            value={pos.size}
+                            onChange={(e) => updatePosition(i, { size: e.target.value, sku: "" })}
+                          />
+                        ) : (
+                          <select
+                            value={pos.size}
+                            disabled={!selectedProduct}
+                            onChange={(e) => updatePosition(i, { size: e.target.value, sku: "" })}
+                          >
+                            <option value="">— розмір —</option>
+                            {availableSizes.map((s) => (
+                              <option key={s} value={s}>{s}</option>
+                            ))}
+                          </select>
+                        )}
                       </div>
                     </div>
 
@@ -1018,7 +1054,7 @@ export const OrdersPage = ({ filterBy, emptyText, actions }: Props) => {
                         <label>Тканина</label>
                         <select
                           value={pos.fabric}
-                          disabled={!selectedProduct}
+                          disabled={!productChosen}
                           onChange={(e) => updatePosition(i, { fabric: e.target.value })}
                         >
                           <option value="">— оберіть тканину —</option>
@@ -1033,9 +1069,15 @@ export const OrdersPage = ({ filterBy, emptyText, actions }: Props) => {
                       const built = buildPosition(pos);
                       if (!built) return null;
                       const isCustomColor = /^KUF\d{3}XX/.test(built.sku);
+                      const isCustomProduct = built.sku.startsWith(OTHER_SKU_PREFIX);
                       return (
                         <div className="modal-sku-preview">
                           SKU: <strong>{built.sku}</strong>
+                          {isCustomProduct && (
+                            <span className="modal-sku-warn">
+                              виріб поза каталогом «{pos.customProductName.trim()}» → код {OTHER_SKU_PREFIX}
+                            </span>
+                          )}
                           {isCustomColor && (
                             <span className="modal-sku-warn">
                               нестандартний колір «{customName}» → код XX

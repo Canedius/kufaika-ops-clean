@@ -43,7 +43,7 @@ const SEASON_OVERSIZE = m => [6, 7, 8].includes(m) ? 2.3 : [5, 9].includes(m) ? 
 // Оверсайз (KUF007/008): floor мінімального запасу на SKU (minTargetAvailable з Calculate To Sew2 n8n).
 const OVERSIZE_FLOOR = {
   "KUF007BKXS/S": 50, "KUF007BKM/L": 50, "KUF007BKXL/XXL": 50, "KUF007WHXS/S": 50, "KUF007WHM/L": 50, "KUF007WHXL/XXL": 50,
-  "KUF008BKXS/S": 100, "KUF008BKM/L": 150, "KUF008BKXL/2XL": 100, "KUF008WHXS/S": 100, "KUF008WHM/L": 150, "KUF008WHXL/2XL": 100,
+  "KUF008BKXS/S": 150, "KUF008BKM/L": 200, "KUF008BKXL/2XL": 150, "KUF008WHXS/S": 150, "KUF008WHM/L": 200, "KUF008WHXL/2XL": 150,
 };
 const H_TARGET = 30, H_REORDER = 20, H_RED = 10, MIN_RUN = 70;
 
@@ -52,7 +52,8 @@ function getBox(sku, size) {
   const p = sku.slice(0, 6), c = sku.slice(6, 8);
   if (p === "KUF006") return (c === "BK" || c === "WH") ? 50 : 15;      // Premium: чорна/біла 50, кольорові 15
   if (p === "KUF007" || p === "KUF008") return 50;                       // Оверсайз/Relaxed
-  if (size === "XS") return 7;                                           // Худі/світшоти
+  if (p === "KUF002") return 20;                                         // Худі легкий: у Calculate To Sew3 усі коробки 20
+  if (size === "XS") return 7;                                           // Худі/світшоти утеплені
   if (["S", "M", "L"].includes(size)) return 12;
   return 10;
 }
@@ -84,7 +85,7 @@ function dailyRate(byDay) {
   const cap = Math.min(med + 1.5 * sp || med * 1.5, an * 1.5 || med * 1.5, quant(vals, 0.9) || med * 1.5) || 0;
   const capped = {}; for (const [d, v] of Object.entries(byDay)) capped[d] = Math.min(v, cap || v);
   const dwd = Object.keys(capped).length, sum = Object.values(capped).reduce((a, b) => a + b, 0); const dr = sum / Math.max(dwd, 14);
-  const now = new Date(); let s3 = 0; for (let i = 0; i < 3; i++) { const d = new Date(now); d.setDate(d.getDate() - i); s3 += (capped[iso(d)] || 0); }
+  const now = new Date(); let s3 = 0; for (let i = 1; i <= 3; i++) { const d = new Date(now); d.setDate(d.getDate() - i); s3 += (capped[iso(d)] || 0); }
   return { dr: +dr.toFixed(3), tr: dr > 0 ? +clamp((s3 / 3) / dr, 0.6, 1.4).toFixed(2) : 1 };
 }
 
@@ -128,7 +129,7 @@ async function main() {
   const cutstock = await (await fetch("https://primary-production-eeb3.up.railway.app/webhook/kufaika-cutstock-get")).json();
   const sew = {}, cutting = {}, cut = {};
   for (const o of orders) { const sku = (o.sku || "").toUpperCase(); if (!realSkus.has(sku)) continue; if (o.status === "in-progress") sew[sku] = (sew[sku] || 0) + (o.quantity || 0); if (o.status === "cutting") cutting[sku] = (cutting[sku] || 0) + (o.cutting_qty || o.quantity || 0); }
-  for (const c of cutstock) { const sku = (c.sku || "").toUpperCase(); if (realSkus.has(sku) && !c.individual && c.status === "available") cut[sku] = (cut[sku] || 0) + (c.qty || 0); }
+  for (const c of cutstock) { const sku = (c.sku || "").toUpperCase(); if (realSkus.has(sku) && !c.individual && c.status !== "individual" && c.status !== "used") cut[sku] = (cut[sku] || 0) + (c.qty || 0); }
 
   // 5) рядки + echelon
   const month = now.getMonth() + 1;
@@ -153,11 +154,16 @@ async function main() {
     const fin = finished[sku] || 0, s = sew[sku] || 0, c = cut[sku] || 0, ic = cutting[sku] || 0, pos = fin + s + c + ic;
     const cover = adu > 0.05 ? pos / adu : 999;
     const box = getBox(sku, sku.slice(8));
+    // Полиця не може бути нижчою за 1 повну коробку — так само, як minTargetBoxes=1 в усіх
+    // Calculate To Sew n8n. Без цього крій мовчав там, де пошив уже подав задачу (напр. KUF002BKL).
+    const total30 = Object.values(sales[sku]?.byDay || {}).reduce((a, b) => a + b, 0);
+    const shelfFloor = (adu > 0 || total30 > 0 || pos < box) ? box : 0;
+    const floorEff = Math.max(floor, shelfFloor);
     // Ціль = ceil(попит×горизонт до коробів) з floor мін.запасу — так само, як desiredAvailable у пошиві
     // (тому крій ≥ того, що пошив збирається спожити). reorder = 2/3 цілі.
-    const target = Math.max(Math.ceil(adu * H_TARGET / box) * box, floor);
+    const target = Math.max(Math.ceil(adu * H_TARGET / box) * box, floorEff);
     const reorder = Math.round(target * H_REORDER / H_TARGET);
-    let deficit = ((adu > 0.05 || floor > 0) && pos < reorder) ? Math.max(0, target - pos) : 0;
+    let deficit = ((adu > 0.05 || floorEff > 0) && pos < reorder) ? Math.max(0, target - pos) : 0;
     if (deficit > 0) deficit = Math.ceil(deficit / box) * box;          // округлення крою до коробів
     const status = deficit > 0 ? (cover < H_RED ? "red" : "yellow") : "green";
     rows.push({ sku, product: PRODUCTS[pfx], productKey: pfx, color: CLR[sku.slice(6, 8)] || sku.slice(6, 8), colorKey: sku.slice(6, 8), size: sku.slice(8), template: TMPL(sku.slice(8)), adu: +adu.toFixed(1), aduTrailing, aduForward, driver, finished: fin, sewing: s, cutStock: c, cutting: ic, position: pos, coverDays: Math.max(0, Math.round(cover)), target, reorder, deficit, box, status });

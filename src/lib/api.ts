@@ -94,6 +94,9 @@ export function colorNameFromSku(sku: string): string {
 export function productTypeFromSku(sku: string): string {
   const prefix = sku.slice(0, 6).toUpperCase();
   const map: Record<string, string> = {
+    // KUF000 — виріб поза каталогом (індивідуальний пошив): назву задає оператор,
+    // тут лише запасний підпис, якщо product_type не долетів із DataTable.
+    KUF000: "Індивідуальний виріб",
     KUF001: "Худі утеплений",
     KUF002: "Худі легкий",
     KUF004: "Світшот утеплений",

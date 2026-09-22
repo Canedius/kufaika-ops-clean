@@ -8,16 +8,8 @@ import { Download, Printer, ArrowUp, ArrowDown } from "lucide-react";
 import { fetchOrders } from "../lib/api";
 import { useExcelExport } from "../hooks/useExcelExport";
 import { CutRecoTable } from "./CutRecoTable";
+import { normalizeSize, sizeColumnsFrom, NO_SIZE_COLUMN } from "../lib/sizes";
 import type { Order, Priority } from "../types";
-
-const SIZE_COLUMNS = ["XS", "XS/S", "S", "M", "M/L", "L", "XL", "XL/2XL", "2XL", "3XL"];
-
-const SIZE_NORMALIZE: Record<string, string> = {
-  "XS": "XS", "XS/S": "XS/S", "S": "S",
-  "M": "M", "M/L": "M/L", "L": "L",
-  "XL": "XL", "XL/XXL": "XL/2XL", "XL/2XL": "XL/2XL",
-  "XXL": "2XL", "2XL": "2XL", "3XL": "3XL", "4XL": "4XL",
-};
 
 type PriorityKey = Priority | "Індивід";
 
@@ -109,7 +101,8 @@ function useAnalyticsData(orders: Order[]) {
       // та індивідуальні замовлення не сумувались зі складськими.
       const fabric = o.fabric || "";
       const key = `${o.productType}::${o.color}::${fabric}::${o.individual ? "ind" : "stock"}`;
-      const col = SIZE_NORMALIZE[o.size] || SIZE_NORMALIZE[o.size?.toUpperCase()] || o.size;
+      // Розмір поза каталогом («XL-2XL», «під замір») теж має свою колонку.
+      const col = normalizeSize(o.size) || NO_SIZE_COLUMN;
       let row = groupMap.get(key);
       if (!row) {
         const label = `${o.productType} — ${o.color}`.replace(/[⬛⬜🩷🩶🟩🟫]/g, "").trim();
@@ -140,6 +133,8 @@ function useAnalyticsData(orders: Order[]) {
         row.totalQty = Object.values(row.sizes).reduce((s, c) => s + c.total, 0);
         return row;
       });
+
+    const sizeCols = sizeColumnsFrom(matrixRows.flatMap((row) => Object.keys(row.sizes)));
 
     // --- Bar chart: qty by product type ---
     const productMap = new Map<string, number>();
@@ -172,7 +167,7 @@ function useAnalyticsData(orders: Order[]) {
       sum + Object.values(row.sizes).filter((c) => c.priority !== "Низький").length, 0,
     );
 
-    return { matrixRows, barData, pieData, totalUnits, totalOrders, criticalCount };
+    return { matrixRows, sizeCols, barData, pieData, totalUnits, totalOrders, criticalCount };
   }, [orders]);
 }
 
@@ -234,7 +229,7 @@ export const AnalyticsPage = () => {
     staleTime: 2 * 60_000,
   });
 
-  const { matrixRows, barData, pieData, totalUnits, totalOrders, criticalCount } =
+  const { matrixRows, sizeCols, barData, pieData, totalUnits, totalOrders, criticalCount } =
     useAnalyticsData(orders);
   const { exportToExcel, exporting } = useExcelExport();
 
@@ -317,7 +312,7 @@ export const AnalyticsPage = () => {
                     Всього <SortIcon active={sortKey === "qty"} />
                   </span>
                 </th>
-                {SIZE_COLUMNS.map((s) => (
+                {sizeCols.map((s) => (
                   <th key={s} className="matrix-header">{s}</th>
                 ))}
               </tr>
@@ -334,7 +329,7 @@ export const AnalyticsPage = () => {
                     )}
                   </td>
                   <td className="matrix-total-col">{row.totalQty}</td>
-                  {SIZE_COLUMNS.map((s) => (
+                  {sizeCols.map((s) => (
                     <MatrixCell key={s} cell={row.sizes[s]} />
                   ))}
                 </tr>

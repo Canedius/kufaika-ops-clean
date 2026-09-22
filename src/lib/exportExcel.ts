@@ -1,5 +1,6 @@
 import ExcelJS from "exceljs";
 import { saveAs } from "file-saver";
+import { normalizeSize, sizeColumnsFrom, NO_SIZE_COLUMN } from "./sizes";
 import type { Order, Priority } from "../types";
 
 interface SizeEntry {
@@ -16,24 +17,6 @@ interface CrossTableRow {
   sizes: Record<string, SizeEntry>;
   comment: string;
 }
-
-const SIZE_COLUMNS = ["XS", "XS/S", "S", "M", "M/L", "L", "XL", "XL/2XL", "2XL", "3XL"] as const;
-
-const SIZE_NORMALIZE: Record<string, string> = {
-  "XS":     "XS",
-  "XS/S":   "XS/S",
-  "S":      "S",
-  "M":      "M",
-  "M/L":    "M/L",
-  "L":      "L",
-  "XL":     "XL",
-  "XL/XXL": "XL/2XL",
-  "XL/2XL": "XL/2XL",
-  "XXL":    "2XL",
-  "2XL":    "2XL",
-  "3XL":    "3XL",
-  "4XL":    "4XL",
-};
 
 const PRIORITY_FILL: Record<Priority, string> = {
   "Критично":  "FFFF0000",
@@ -76,7 +59,8 @@ export function aggregateOrders(orders: Order[]): CrossTableRow[] {
     const sizes: Record<string, SizeEntry> = {};
 
     for (const o of group) {
-      const col = SIZE_NORMALIZE[o.size] || SIZE_NORMALIZE[o.size.toUpperCase()] || o.size;
+      // Розмір поза каталогом («XL-2XL», «під замір») теж має свою колонку.
+      const col = normalizeSize(o.size) || NO_SIZE_COLUMN;
       const existing = sizes[col];
       if (existing) {
         existing.qty += o.quantity;
@@ -119,6 +103,7 @@ const THIN_BORDER: Partial<ExcelJS.Borders> = {
 
 export function generateWorkbook(orders: Order[]): ExcelJS.Workbook {
   const rows = aggregateOrders(orders);
+  const sizeCols = sizeColumnsFrom(rows.flatMap((r) => Object.keys(r.sizes)));
   const wb = new ExcelJS.Workbook();
   const ws = wb.addWorksheet("Замовлення на пошив");
 
@@ -128,7 +113,7 @@ export function generateWorkbook(orders: Order[]): ExcelJS.Workbook {
     { header: "Тканина",          width: 24 },
     { header: "SKU",              width: 12 },
     { header: "Заг. К-ть",       width: 10 },
-    ...SIZE_COLUMNS.map((s) => ({ header: s, width: s.length > 6 ? 12 : 6 })),
+    ...sizeCols.map((s) => ({ header: s, width: s.length > 6 ? 12 : 6 })),
     { header: "Термін виконання", width: 16 },
     { header: "№ замовлення",     width: 14 },
     { header: "Бірка на спині",   width: 14 },
@@ -155,7 +140,7 @@ export function generateWorkbook(orders: Order[]): ExcelJS.Workbook {
   // Column indices (1-based)
   const COL_TOTAL = 5;
   const COL_SIZE_START = 6; // first size column
-  const COL_SIZE_END = COL_SIZE_START + SIZE_COLUMNS.length - 1;
+  const COL_SIZE_END = COL_SIZE_START + sizeCols.length - 1;
 
   // Data rows
   for (const row of rows) {
@@ -165,7 +150,7 @@ export function generateWorkbook(orders: Order[]): ExcelJS.Workbook {
       row.fabric,
       row.sku,
       row.totalQty,
-      ...SIZE_COLUMNS.map((s) => row.sizes[s]?.qty || ""),
+      ...sizeCols.map((s) => row.sizes[s]?.qty || ""),
       "",  // Термін виконання
       "",  // № замовлення
       "",  // Бірка на спині
@@ -187,8 +172,8 @@ export function generateWorkbook(orders: Order[]): ExcelJS.Workbook {
     }
 
     // Color each size cell individually by its priority
-    for (let i = 0; i < SIZE_COLUMNS.length; i++) {
-      const sizeKey = SIZE_COLUMNS[i];
+    for (let i = 0; i < sizeCols.length; i++) {
+      const sizeKey = sizeCols[i];
       const entry = row.sizes[sizeKey];
       if (entry && entry.qty > 0) {
         const cell = dataRow.getCell(COL_SIZE_START + i);

@@ -3,6 +3,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { FilterBar } from "./FilterBar";
 import { OrderCard } from "./OrderCard";
 import { fetchOrders, fetchCutStock, updateOrder, editOrder, consumeFromStock, addToStock, createCuttingOrder, createIncomingOrder, archiveOrder, deleteOrder, formatDate, PRODUCT_CATALOG, COLOR_CATALOG, FABRIC_OPTIONS, fabricFromSku } from "../lib/api";
+import { normalizeSize } from "../lib/sizes";
 import type { Order, OrderStatus, Priority, CutStockItem, SortLevel } from "../types";
 import { priorityTone, statusLabel, statusTone } from "../theme";
 import { getPhotoUrl } from "../lib/photos";
@@ -440,10 +441,14 @@ export const OrdersPage = ({ filterBy, emptyText, actions }: Props) => {
     if ((isOther ? !customProduct : !product) || (!customName && !p.colorCode) || !p.size.trim() || p.qty < 1) return null;
     const catalogName = COLOR_CATALOG.find((c) => c.code === effectiveColorCode)?.name;
     const effectiveColorName = catalogName || customName || effectiveColorCode;
-    const autoSku = `${isOther ? OTHER_SKU_PREFIX : p.productCode}${effectiveColorCode}${p.size.trim()}`;
+    // Розмір виробу поза каталогом вводять руками («XL-2XL», «xl/xxl») — зводимо
+    // до канонічного вигляду, інакше позиція не попадає в колонку матриці аналізу.
+    // Каталожні розміри лишаємо як є: вони частина реальних SKU у KeyCRM.
+    const effectiveSize = isOther ? normalizeSize(p.size) || p.size.trim() : p.size.trim();
+    const autoSku = `${isOther ? OTHER_SKU_PREFIX : p.productCode}${effectiveColorCode}${effectiveSize}`;
     return {
       productType: isOther ? customProduct : product!.name,
-      size: p.size.trim(),
+      size: effectiveSize,
       qty: p.qty,
       sku: p.sku.trim() || autoSku,
       color: effectiveColorName,
